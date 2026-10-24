@@ -590,7 +590,7 @@ function isAllowedHost(value) {
   });
 }
 
-// Хосты, которым разрешено проверять внутренние адреса (например, локальный агент «Мир»)
+// Хосты, которым разрешено проверять внутренние адреса (например, локальный сервис)
 const CHECK_ALLOW_PRIVATE = new Set(csvEnv('CHECK_ALLOW_PRIVATE_HOSTS').map((e) => {
   const hp = splitHostPort(e);
   return hp ? hp.name.replace(/^\[|\]$/g, '') : e;

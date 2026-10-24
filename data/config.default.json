@@ -138,37 +138,6 @@
       ],
       "icon": "/icons/gemini.svg",
       "demo": false
-    },
-    {
-      "id": "mir",
-      "name": "Мир (локальный агент)",
-      "url": "http://localhost:3000",
-      "access": [
-        "local"
-      ],
-      "models": [],
-      "tasks": [
-        "Работа с локальными файлами",
-        "Команды в терминале",
-        "Автоматизация на Mac"
-      ],
-      "subscription": "",
-      "apiAccess": "unknown",
-      "limits": "Работает только на этом компьютере",
-      "status": {
-        "site": "unchecked",
-        "api": "unchecked",
-        "tools": "unchecked"
-      },
-      "checkedAt": null,
-      "handoff": {
-        "type": "none",
-        "template": ""
-      },
-      "notes": "Демо-запись. Модели и адрес заполнить вручную.",
-      "sources": [],
-      "icon": "/icons/mir.svg",
-      "demo": true
     }
   ],
   "tools": [
@@ -267,20 +236,6 @@
       "source": "демо-пример, не проверено",
       "checkedAt": null,
       "demo": true
-    },
-    {
-      "toolId": "files",
-      "systemId": "mir",
-      "status": "available",
-      "kind": "builtin",
-      "method": "Локальный доступ (пример — проверить)",
-      "actions": [
-        "read",
-        "write"
-      ],
-      "source": "демо-пример, не проверено",
-      "checkedAt": null,
-      "demo": true
     }
   ],
   "rules": [
@@ -336,8 +291,7 @@
         "Коммит в репозиторий"
       ],
       "preferredSystems": [
-        "claude",
-        "mir"
+        "claude"
       ],
       "promptTemplate": "Исправь сайт: {task}. Сначала опиши, что изменишь, затем внеси правки и кратко перечисли изменения.",
       "priority": 8,
@@ -457,7 +411,6 @@
         "Запуск команд"
       ],
       "preferredSystems": [
-        "mir",
         "claude"
       ],
       "promptTemplate": "Обработай локальные файлы: {task}. Перед изменениями покажи план и список затрагиваемых файлов.",
@@ -534,7 +487,6 @@
         "Связывание заметок"
       ],
       "preferredSystems": [
-        "mir",
         "claude"
       ],
       "promptTemplate": "Оформи в Obsidian структурированную заметку по задаче: {task}. Добавь подходящие заголовки, ссылки между заметками и теги, не добавляя неподтверждённых фактов.",

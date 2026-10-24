@@ -169,8 +169,8 @@ ai-dashboard/
 - Данные пользователя (названия, задачи, лимиты) и тексты сервера (объяснения подбора `reasons`, ошибки API) не переводятся — остаются на русском.
 
 ## 7. Стартовые данные (`config.default.json`)
-Системы: chatgpt, claude, gemini, mir (локальный агент, url `http://localhost:…`, access ["local"], handoff none). Для всех `status` = unchecked, `checkedAt` = null, `apiAccess` = "unknown", `demo: true`.
+Системы: chatgpt, claude, gemini. Для всех `status` = unchecked, `checkedAt` = null, `apiAccess` = "unknown", `demo: true`.
 Инструменты: gmail, calendar, drive, github, browser, files, terminal, figma, todoist, obsidian, skills (category skill).
 Connections: **пустые** (всё unknown) — кроме 2–3 примеров со статусом `available` и `demo:true` для демонстрации.
-v1.1: chatgpt/claude/gemini заполнены по результату GPT-6 Sol (24.10.2026, `demo:false`, `sources`), у всех четырёх систем задан `icon`; к правилам добавлены 15 правил из `gpt-results/02-rules.json` (`demo:false`).
+v1.1: chatgpt/claude/gemini заполнены по результату GPT-6 Sol (24.10.2026, `demo:false`, `sources`), у всех систем задан `icon`; к правилам добавлены 15 правил из `gpt-results/02-rules.json` (`demo:false`).
 Исходные правила (demo:true, 8 шт.): найти письмо (gmail), исправить сайт (files/terminal/github), изучить исследования (browser), написать Android-приложение (terminal/github/files), подготовить документ (files/drive), обработать локальные файлы (files/terminal), календарь (calendar), задачи (todoist), + `default` без keywords.

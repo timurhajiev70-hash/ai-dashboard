@@ -128,7 +128,7 @@ expect "некорректный icon → 400" "$code" 400
 code=$(req PUT /api/systems/test-sys "{\"sources\":$(node -e 'process.stdout.write(JSON.stringify(Array.from({length:21},(_, i)=>"https://e.com/"+i)))')}")
 expect "больше 20 sources → 400" "$code" 400
 code=$(req GET /api/icons)
-expect "GET /api/icons → 4 файла" "$(jget 'Array.isArray(j) && j.join()')" "chatgpt.svg,claude.svg,gemini.svg,mir.svg"
+expect "GET /api/icons → 3 файла" "$(jget 'Array.isArray(j) && j.join()')" "chatgpt.svg,claude.svg,gemini.svg"
 code=$(req PUT /api/settings '{"language":"de"}')
 expect "settings.language = de → 200" "$(jget 'j.language')" de
 code=$(req PUT /api/settings '{"language":"fr"}')
