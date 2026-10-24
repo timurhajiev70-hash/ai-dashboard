@@ -1,0 +1,966 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-24T08:00:00Z",
+  "systems": [
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "url": "https://chatgpt.com",
+      "access": [
+        "app",
+        "browser",
+        "api"
+      ],
+      "models": [
+        "GPT-5.6 Luna",
+        "GPT-5.6 Sol",
+        "GPT-6 Sol",
+        "GPT-6 Pro (GPT-6 Astra)"
+      ],
+      "tasks": [
+        "Ответы на вопросы и написание текстов",
+        "Поиск и исследование с источниками",
+        "Анализ файлов и данных",
+        "Программирование и работа с кодом",
+        "Создание изображений"
+      ],
+      "subscription": "Free, Go, Plus, Pro, Business, Enterprise",
+      "apiAccess": "yes",
+      "limits": "Free — $0; Plus — $20 в месяц; Pro 100, Pro 200 и Pro 500 — соответственно $100, $200 и $500 в месяц (цены в USD, местные цены и налоги могут отличаться). Повседневные текстовые чаты Free и Go заявлены как неограниченные с защитными ограничениями, а загрузки, изображения и другие инструменты имеют отдельные лимиты; доступ к моделям и лимиты зависят от тарифа. API оплачивается отдельно от подписки ChatGPT; актуальную цену Go на открытой странице установить не удалось.",
+      "status": {
+        "site": "unchecked",
+        "api": "unchecked",
+        "tools": "unchecked"
+      },
+      "checkedAt": "2026-10-24",
+      "handoff": {
+        "type": "none",
+        "template": "https://chatgpt.com/?q={prompt}"
+      },
+      "notes": "Данные собраны GPT-6 Sol 24.10.2026 по источникам, см. sources. Передача через ссылку ?q= — способ передачи не проверен; после проверки можно включить handoff.type = \"url\".",
+      "sources": [
+        "https://chatgpt.com/pricing/",
+        "https://help.openai.com/en/articles/6950777-what-is-chatgpt-plus",
+        "https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers",
+        "https://help.openai.com/en/articles/20001354-gpt-6-and-other-models-in-chatgpt"
+      ],
+      "icon": "/icons/chatgpt.svg",
+      "demo": false
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "url": "https://claude.ai",
+      "access": [
+        "app",
+        "browser",
+        "api"
+      ],
+      "models": [
+        "Claude Haiku 5.5",
+        "Claude Sonnet 5.5",
+        "Claude Opus 5.5",
+        "Claude Fable 5.1"
+      ],
+      "tasks": [
+        "Написание и редактирование текстов",
+        "Поиск и исследование",
+        "Анализ документов и данных",
+        "Программирование",
+        "Создание файлов и презентаций"
+      ],
+      "subscription": "Free, Pro, Max 5x, Max 20x, Team, Enterprise",
+      "apiAccess": "yes",
+      "limits": "Free — $0; Pro — $20 в месяц или $200 в год; Max 5x — $100 в месяц, Max 20x — $200 в месяц (USD, без применимых налогов). У платных планов есть лимит сессии с обновлением каждые 5 часов и недельный лимит; Max даёт соответственно 5x или 20x вместимости Pro за сессию. API тарифицируется отдельно, но Max 5x и Max 20x включают соответственно $100 и $200 ежемесячных API-кредитов после привязки Claude Console.",
+      "status": {
+        "site": "unchecked",
+        "api": "unchecked",
+        "tools": "unchecked"
+      },
+      "checkedAt": "2026-10-24",
+      "handoff": {
+        "type": "none",
+        "template": ""
+      },
+      "notes": "Данные собраны GPT-6 Sol 24.10.2026 по источникам, см. sources. Способ передачи задачи через ссылку не проверен.",
+      "sources": [
+        "https://claude.com/pricing",
+        "https://support.claude.com/en/articles/11049762-choose-a-claude-plan",
+        "https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans",
+        "https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers",
+        "https://support.claude.com/en/articles/8664678-change-the-model-effort-and-thinking-settings"
+      ],
+      "icon": "/icons/claude.svg",
+      "demo": false
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "url": "https://gemini.google.com",
+      "access": [
+        "app",
+        "browser",
+        "api"
+      ],
+      "models": [
+        "Gemini Flash-Lite",
+        "Gemini Flash",
+        "Gemini Pro",
+        "Gemini 4 Argon"
+      ],
+      "tasks": [
+        "Ответы на вопросы и подготовка текстов",
+        "Поиск и исследование",
+        "Анализ файлов и изображений",
+        "Программирование",
+        "Создание изображений и видео"
+      ],
+      "subscription": "Без подписки, Google AI Plus, Google AI Pro, Google AI Ultra",
+      "apiAccess": "yes",
+      "limits": "На немецкой странице Google AI Plus указан за €4.99 или €9.99 в месяц в зависимости от объёма хранилища; для Google AI Pro подтверждена цена США $19.99 в месяц, а актуальная публичная цена Ultra не найдена. В приложении Plus даёт 2x, Pro — 4x стандартного лимита, Ultra — 5x или 20x лимита Pro в зависимости от варианта подписки; конкретные ограничения могут меняться. Gemini API имеет отдельные бесплатный и платный уровни и не входит автоматически в подписку приложения.",
+      "status": {
+        "site": "unchecked",
+        "api": "unchecked",
+        "tools": "unchecked"
+      },
+      "checkedAt": "2026-10-24",
+      "handoff": {
+        "type": "none",
+        "template": ""
+      },
+      "notes": "Данные собраны GPT-6 Sol 24.10.2026 по источникам, см. sources. Способ передачи задачи через ссылку не проверен.",
+      "sources": [
+        "https://support.google.com/gemini/answer/18648722",
+        "https://support.google.com/gemini/answer/16275805",
+        "https://one.google.com/intl/de_de/about/google-ai-plans/",
+        "https://blog.google/products-and-platforms/products/workspace/gemini-google-workspace-back-to-school/",
+        "https://ai.google.dev/gemini-api/docs/pricing"
+      ],
+      "icon": "/icons/gemini.svg",
+      "demo": false
+    },
+    {
+      "id": "mir",
+      "name": "Мир (локальный агент)",
+      "url": "http://localhost:3000",
+      "access": [
+        "local"
+      ],
+      "models": [],
+      "tasks": [
+        "Работа с локальными файлами",
+        "Команды в терминале",
+        "Автоматизация на Mac"
+      ],
+      "subscription": "",
+      "apiAccess": "unknown",
+      "limits": "Работает только на этом компьютере",
+      "status": {
+        "site": "unchecked",
+        "api": "unchecked",
+        "tools": "unchecked"
+      },
+      "checkedAt": null,
+      "handoff": {
+        "type": "none",
+        "template": ""
+      },
+      "notes": "Демо-запись. Модели и адрес заполнить вручную.",
+      "sources": [],
+      "icon": "/icons/mir.svg",
+      "demo": true
+    }
+  ],
+  "tools": [
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "category": "mail",
+      "demo": true
+    },
+    {
+      "id": "calendar",
+      "name": "Календарь",
+      "category": "calendar",
+      "demo": true
+    },
+    {
+      "id": "drive",
+      "name": "Google Drive",
+      "category": "files",
+      "demo": true
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "code",
+      "demo": true
+    },
+    {
+      "id": "browser",
+      "name": "Браузер",
+      "category": "browser",
+      "demo": true
+    },
+    {
+      "id": "files",
+      "name": "Локальные файлы",
+      "category": "files",
+      "demo": true
+    },
+    {
+      "id": "terminal",
+      "name": "Терминал",
+      "category": "terminal",
+      "demo": true
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "category": "design",
+      "demo": true
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "category": "tasks",
+      "demo": true
+    },
+    {
+      "id": "obsidian",
+      "name": "Obsidian",
+      "category": "notes",
+      "demo": true
+    },
+    {
+      "id": "skills",
+      "name": "Навыки (skills)",
+      "category": "skill",
+      "demo": true
+    }
+  ],
+  "connections": [
+    {
+      "toolId": "gmail",
+      "systemId": "claude",
+      "status": "available",
+      "kind": "mcp",
+      "method": "Коннектор в настройках (пример — проверить)",
+      "actions": [
+        "read",
+        "search"
+      ],
+      "source": "демо-пример, не проверено",
+      "checkedAt": null,
+      "demo": true
+    },
+    {
+      "toolId": "drive",
+      "systemId": "gemini",
+      "status": "available",
+      "kind": "builtin",
+      "method": "Расширение Google (пример — проверить)",
+      "actions": [
+        "read",
+        "search"
+      ],
+      "source": "демо-пример, не проверено",
+      "checkedAt": null,
+      "demo": true
+    },
+    {
+      "toolId": "files",
+      "systemId": "mir",
+      "status": "available",
+      "kind": "builtin",
+      "method": "Локальный доступ (пример — проверить)",
+      "actions": [
+        "read",
+        "write"
+      ],
+      "source": "демо-пример, не проверено",
+      "checkedAt": null,
+      "demo": true
+    }
+  ],
+  "rules": [
+    {
+      "id": "find-email",
+      "name": "Найти письмо",
+      "keywords": [
+        "письм",
+        "почт",
+        "входящ",
+        "mail",
+        "gmail",
+        "email",
+        "inbox"
+      ],
+      "requiredTools": [
+        "gmail"
+      ],
+      "capabilities": [
+        "Поиск по почте",
+        "Чтение писем"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Найди в моей почте: {task}. Покажи отправителя, дату и краткое содержание.",
+      "priority": 10,
+      "demo": true
+    },
+    {
+      "id": "fix-website",
+      "name": "Исправить сайт",
+      "keywords": [
+        "сайт",
+        "вёрстк",
+        "верстк",
+        "страниц",
+        "website",
+        "site",
+        "html",
+        "css",
+        "landing"
+      ],
+      "requiredTools": [
+        "files",
+        "terminal",
+        "github"
+      ],
+      "capabilities": [
+        "Чтение и правка кода",
+        "Запуск команд",
+        "Коммит в репозиторий"
+      ],
+      "preferredSystems": [
+        "claude",
+        "mir"
+      ],
+      "promptTemplate": "Исправь сайт: {task}. Сначала опиши, что изменишь, затем внеси правки и кратко перечисли изменения.",
+      "priority": 8,
+      "demo": true
+    },
+    {
+      "id": "research",
+      "name": "Изучить исследования",
+      "keywords": [
+        "исследован",
+        "статьи",
+        "статью",
+        "литератур",
+        "источник",
+        "обзор",
+        "research",
+        "study",
+        "studies",
+        "paper",
+        "pubmed"
+      ],
+      "requiredTools": [
+        "browser"
+      ],
+      "capabilities": [
+        "Поиск в интернете",
+        "Чтение научных статей",
+        "Сравнение источников"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "gemini"
+      ],
+      "promptTemplate": "Изучи исследования по теме: {task}. Дай краткий вывод, таблицу ключевых работ (год, дизайн, результат) и ссылки на источники.",
+      "priority": 7,
+      "demo": true
+    },
+    {
+      "id": "android-app",
+      "name": "Написать Android-приложение",
+      "keywords": [
+        "android",
+        "андроид",
+        "приложени",
+        "kotlin",
+        "котлин",
+        "apk"
+      ],
+      "requiredTools": [
+        "terminal",
+        "github",
+        "files"
+      ],
+      "capabilities": [
+        "Написание кода",
+        "Сборка проекта",
+        "Работа с репозиторием"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Помоги написать Android-приложение: {task}. Предложи структуру проекта, затем код по файлам и команды сборки.",
+      "priority": 8,
+      "demo": true
+    },
+    {
+      "id": "prepare-document",
+      "name": "Подготовить документ",
+      "keywords": [
+        "документ",
+        "отчёт",
+        "отчет",
+        "письмо-шаблон",
+        "инструкци",
+        "презентац",
+        "document",
+        "report",
+        "docx",
+        "pdf"
+      ],
+      "requiredTools": [
+        "files",
+        "drive"
+      ],
+      "capabilities": [
+        "Создание и редактирование документов",
+        "Доступ к файлам"
+      ],
+      "preferredSystems": [
+        "claude",
+        "gemini"
+      ],
+      "promptTemplate": "Подготовь документ: {task}. Структурируй по разделам, используй таблицы, где уместно.",
+      "priority": 6,
+      "demo": true
+    },
+    {
+      "id": "local-files",
+      "name": "Обработать локальные файлы",
+      "keywords": [
+        "файл",
+        "папк",
+        "локальн",
+        "переимен",
+        "file",
+        "folder",
+        "local",
+        "csv"
+      ],
+      "requiredTools": [
+        "files",
+        "terminal"
+      ],
+      "capabilities": [
+        "Чтение и запись локальных файлов",
+        "Запуск команд"
+      ],
+      "preferredSystems": [
+        "mir",
+        "claude"
+      ],
+      "promptTemplate": "Обработай локальные файлы: {task}. Перед изменениями покажи план и список затрагиваемых файлов.",
+      "priority": 5,
+      "demo": true
+    },
+    {
+      "id": "calendar",
+      "name": "Календарь",
+      "keywords": [
+        "календар",
+        "встреч",
+        "событи",
+        "запланир",
+        "calendar",
+        "meeting",
+        "event",
+        "schedule"
+      ],
+      "requiredTools": [
+        "calendar"
+      ],
+      "capabilities": [
+        "Просмотр и создание событий в календаре"
+      ],
+      "preferredSystems": [
+        "claude",
+        "gemini"
+      ],
+      "promptTemplate": "Календарь: {task}. Покажи итог: дата, время, название события.",
+      "priority": 9,
+      "demo": true
+    },
+    {
+      "id": "tasks",
+      "name": "Задачи",
+      "keywords": [
+        "задач",
+        "напомин",
+        "todo",
+        "todoist",
+        "task",
+        "reminder"
+      ],
+      "requiredTools": [
+        "todoist"
+      ],
+      "capabilities": [
+        "Создание и изменение задач в Todoist"
+      ],
+      "preferredSystems": [
+        "claude"
+      ],
+      "promptTemplate": "Todoist: {task}. Покажи итоговый список задач со сроками.",
+      "priority": 4,
+      "demo": true
+    },
+    {
+      "id": "obsidian-knowledge-note",
+      "name": "Оформить заметку в Obsidian",
+      "keywords": [
+        "обсидиан",
+        "заметк",
+        "конспект",
+        "zettelkasten",
+        "obsidian",
+        "knowledge-note"
+      ],
+      "requiredTools": [
+        "obsidian"
+      ],
+      "capabilities": [
+        "Создание структурированных заметок",
+        "Связывание заметок"
+      ],
+      "preferredSystems": [
+        "mir",
+        "claude"
+      ],
+      "promptTemplate": "Оформи в Obsidian структурированную заметку по задаче: {task}. Добавь подходящие заголовки, ссылки между заметками и теги, не добавляя неподтверждённых фактов.",
+      "priority": 13,
+      "demo": false
+    },
+    {
+      "id": "figma-interface-prototype",
+      "name": "Создать прототип интерфейса в Figma",
+      "keywords": [
+        "фигм",
+        "макет",
+        "вайрфрейм",
+        "прототип",
+        "figma",
+        "wireframe",
+        "mockup",
+        "prototype"
+      ],
+      "requiredTools": [
+        "figma"
+      ],
+      "capabilities": [
+        "Проектирование интерфейсов",
+        "Создание редактируемого прототипа"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Создай в Figma прототип по описанию: {task}. Используй понятную структуру экранов и укажи ключевые состояния элементов.",
+      "priority": 14,
+      "demo": false
+    },
+    {
+      "id": "github-code-review",
+      "name": "Провести ревью кода на GitHub",
+      "keywords": [
+        "ревью кода",
+        "пул-реквест",
+        "мерж-реквест",
+        "pull request",
+        "code review",
+        "diff",
+        "github review"
+      ],
+      "requiredTools": [
+        "github"
+      ],
+      "capabilities": [
+        "Чтение изменений в репозитории",
+        "Поиск дефектов в коде",
+        "Подготовка комментариев к изменениям"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Проведи ревью изменений на GitHub: {task}. Перечисли только подтверждённые проблемы с указанием места, риска и предлагаемого исправления.",
+      "priority": 17,
+      "demo": false
+    },
+    {
+      "id": "translate-professional-text",
+      "name": "Перевести профессиональный текст",
+      "keywords": [
+        "перевод",
+        "перевести",
+        "немецк",
+        "английск",
+        "translate",
+        "translation",
+        "german",
+        "english"
+      ],
+      "requiredTools": [],
+      "capabilities": [
+        "Профессиональный перевод",
+        "Сохранение терминологии и структуры"
+      ],
+      "preferredSystems": [
+        "gemini",
+        "chatgpt"
+      ],
+      "promptTemplate": "Переведи текст согласно задаче: {task}. Сохрани смысл, структуру, имена продуктов и все плейсхолдеры без изменений.",
+      "priority": 12,
+      "demo": false
+    },
+    {
+      "id": "compose-staff-message",
+      "name": "Составить сообщение сотруднику",
+      "keywords": [
+        "сотрудник",
+        "коллег",
+        "персонал",
+        "staff message",
+        "employee",
+        "colleague",
+        "team message"
+      ],
+      "requiredTools": [
+        "gmail"
+      ],
+      "capabilities": [
+        "Подготовка деловой переписки",
+        "Работа с почтовым черновиком"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Подготовь сообщение сотруднику по задаче: {task}. Сделай текст ясным, вежливым и конкретным; не отправляй его без отдельного подтверждения.",
+      "priority": 15,
+      "demo": false
+    },
+    {
+      "id": "analyze-spreadsheet",
+      "name": "Проанализировать таблицу",
+      "keywords": [
+        "таблиц",
+        "эксел",
+        "сводн",
+        "xlsx",
+        "spreadsheet",
+        "excel",
+        "pivot",
+        "worksheet"
+      ],
+      "requiredTools": [
+        "files"
+      ],
+      "capabilities": [
+        "Анализ табличных данных",
+        "Проверка формул и аномалий",
+        "Расчёт сводных показателей"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "gemini"
+      ],
+      "promptTemplate": "Проанализируй таблицу: {task}. Сначала проверь структуру и качество данных, затем покажи расчёты, аномалии и краткие выводы.",
+      "priority": 16,
+      "demo": false
+    },
+    {
+      "id": "prepare-team-briefing",
+      "name": "Подготовить совещание команды",
+      "keywords": [
+        "совещан",
+        "повестк",
+        "брифинг",
+        "протоколирован",
+        "agenda",
+        "briefing",
+        "minutes",
+        "team sync"
+      ],
+      "requiredTools": [
+        "drive"
+      ],
+      "capabilities": [
+        "Подготовка повестки",
+        "Структурирование вопросов и решений",
+        "Создание шаблона протокола"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Подготовь материалы для командного совещания: {task}. Составь цель, повестку, вопросы для решения и шаблон итогового протокола.",
+      "priority": 11,
+      "demo": false
+    },
+    {
+      "id": "check-medical-regulation",
+      "name": "Проверить медицинские требования",
+      "keywords": [
+        "норматив",
+        "приказ",
+        "регламент",
+        "директив",
+        "regulation",
+        "richtlinie",
+        "guideline",
+        "compliance",
+        "требовани"
+      ],
+      "requiredTools": [
+        "browser"
+      ],
+      "capabilities": [
+        "Поиск актуальных официальных требований",
+        "Сопоставление требований с датой и юрисдикцией"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "gemini"
+      ],
+      "promptTemplate": "Проверь актуальные требования по вопросу: {task}. Используй официальные источники, укажи дату проверки и отдели подтверждённые нормы от неясных моментов.",
+      "priority": 18,
+      "demo": false
+    },
+    {
+      "id": "debug-test-failure",
+      "name": "Разобрать падение тестов",
+      "keywords": [
+        "падение тест",
+        "трассировк",
+        "стектрейс",
+        "отладк",
+        "test failure",
+        "stacktrace",
+        "debug",
+        "failing test"
+      ],
+      "requiredTools": [
+        "terminal",
+        "github"
+      ],
+      "capabilities": [
+        "Запуск тестов",
+        "Анализ трассировки ошибок",
+        "Локализация причины сбоя"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Разбери сбой тестов: {task}. Воспроизведи ошибку, укажи подтверждённую причину и предложи минимальное исправление с повторной проверкой.",
+      "priority": 17,
+      "demo": false
+    },
+    {
+      "id": "create-reusable-skill",
+      "name": "Создать повторно используемый навык",
+      "keywords": [
+        "навык для ии",
+        "скилл",
+        "автоматизац",
+        "skill package",
+        "reusable skill",
+        "workflow automation",
+        "playbook",
+        "навык"
+      ],
+      "requiredTools": [
+        "skills"
+      ],
+      "capabilities": [
+        "Проектирование повторяемого процесса",
+        "Создание инструкций навыка",
+        "Определение проверок результата"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Создай повторно используемый навык для задачи: {task}. Опиши условия запуска, последовательность действий, ограничения и способ проверки результата.",
+      "priority": 13,
+      "demo": false
+    },
+    {
+      "id": "organize-drive-archive",
+      "name": "Упорядочить архив в Google Drive",
+      "keywords": [
+        "гугл диск",
+        "облачный архив",
+        "каталогизац",
+        "структура папок",
+        "google drive",
+        "cloud archive",
+        "folder taxonomy",
+        "drive cleanup"
+      ],
+      "requiredTools": [
+        "drive"
+      ],
+      "capabilities": [
+        "Анализ структуры Google Drive",
+        "Проектирование структуры папок",
+        "Выявление дубликатов"
+      ],
+      "preferredSystems": [
+        "gemini",
+        "claude"
+      ],
+      "promptTemplate": "Разработай безопасный план упорядочивания Google Drive: {task}. Сначала покажи предлагаемую структуру и список изменений; ничего не перемещай и не удаляй без подтверждения.",
+      "priority": 14,
+      "demo": false
+    },
+    {
+      "id": "patient-friendly-explanation",
+      "name": "Объяснить медицинскую тему пациенту",
+      "keywords": [
+        "памятк",
+        "простыми словами",
+        "информирован",
+        "patient handout",
+        "patient-friendly",
+        "plain language",
+        "patient information",
+        "пациент"
+      ],
+      "requiredTools": [],
+      "capabilities": [
+        "Адаптация медицинского текста для пациента",
+        "Объяснение терминов простым языком"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Объясни пациенту простыми словами: {task}. Не добавляй диагнозов или цифр, которых нет во входных данных, и отдельно укажи, когда нужна консультация врача.",
+      "priority": 16,
+      "demo": false
+    },
+    {
+      "id": "compare-practice-equipment",
+      "name": "Сравнить оборудование для практики",
+      "keywords": [
+        "медоборудован",
+        "аппарат",
+        "теххарактеристик",
+        "производител",
+        "medical equipment",
+        "device comparison",
+        "vendor specification",
+        "practice device",
+        "оборудован"
+      ],
+      "requiredTools": [
+        "browser"
+      ],
+      "capabilities": [
+        "Поиск характеристик оборудования",
+        "Сравнение предложений по проверяемым критериям",
+        "Сбор ссылок на производителей"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "gemini"
+      ],
+      "promptTemplate": "Сравни оборудование для практики по запросу: {task}. Приведи проверяемые характеристики, цены только при наличии источника, дату проверки и ссылки.",
+      "priority": 15,
+      "demo": false
+    },
+    {
+      "id": "analyze-practice-budget",
+      "name": "Проанализировать бюджет практики",
+      "keywords": [
+        "бюджет практик",
+        "ликвидност",
+        "денежный поток",
+        "операционн",
+        "practice budget",
+        "cash flow",
+        "liquidity",
+        "operating expense",
+        "бюджет"
+      ],
+      "requiredTools": [
+        "files"
+      ],
+      "capabilities": [
+        "Расчёт денежных потоков",
+        "Разделение регулярных и разовых расходов",
+        "Сценарный анализ"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "claude"
+      ],
+      "promptTemplate": "Проанализируй бюджет практики: {task}. Покажи исходные допущения, расчёты, регулярные и разовые расходы отдельно, а неизвестные значения пометь явно.",
+      "priority": 18,
+      "demo": false
+    },
+    {
+      "id": "security-threat-assessment",
+      "name": "Проверить безопасность проекта",
+      "keywords": [
+        "уязвимост",
+        "модель угроз",
+        "защит",
+        "секьюрити",
+        "vulnerability",
+        "threat model",
+        "security audit",
+        "hardening",
+        "безопасност"
+      ],
+      "requiredTools": [
+        "github",
+        "terminal"
+      ],
+      "capabilities": [
+        "Анализ поверхности атаки",
+        "Проверка конфигурации безопасности",
+        "Приоритизация подтверждённых рисков"
+      ],
+      "preferredSystems": [
+        "claude",
+        "chatgpt"
+      ],
+      "promptTemplate": "Проверь безопасность проекта в рамках задачи: {task}. Сообщай только подтверждённые находки с доказательством, уровнем риска и минимальным способом исправления.",
+      "priority": 19,
+      "demo": false
+    },
+    {
+      "id": "default",
+      "name": "Общая задача",
+      "keywords": [],
+      "requiredTools": [],
+      "capabilities": [
+        "Общие ответы и тексты"
+      ],
+      "preferredSystems": [
+        "chatgpt",
+        "claude"
+      ],
+      "promptTemplate": "{task}",
+      "priority": 0,
+      "demo": true
+    }
+  ],
+  "settings": {
+    "theme": "auto",
+    "language": "ru"
+  }
+}

@@ -1,0 +1,6 @@
+data/config.json
+data/config.json.bak
+data/.env
+data/.sessions.json
+data/server.log
+data/server.pid

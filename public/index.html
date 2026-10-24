@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title data-i18n="meta.title">Мои ИИ системы</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Экран загрузки / ошибки соединения -->
+  <div id="boot" class="boot">
+    <div class="boot-box">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="boot-text" data-i18n="boot.loading">Загрузка…</p>
+      <button type="button" id="boot-retry" class="btn" hidden data-i18n="buttons.retry">Повторить</button>
+    </div>
+  </div>
+
+  <!-- Экран входа -->
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card" autocomplete="on">
+      <h1 data-i18n="meta.title">Мои ИИ системы</h1>
+      <p class="muted" data-i18n="login.hint">Введите пароль для входа</p>
+      <label class="field">
+        <span data-i18n="login.password">Пароль</span>
+        <input type="password" name="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="form-error" role="alert" hidden></p>
+      <button type="submit" class="btn btn-primary btn-block" id="login-submit" data-i18n="buttons.login">Войти</button>
+    </form>
+  </section>
+
+  <!-- Основное приложение -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="topbar-row">
+        <h1 class="brand" data-i18n="meta.title">Мои ИИ системы</h1>
+        <label class="search">
+          <span class="sr-only" data-i18n="search.label">Поиск</span>
+          <input type="search" id="search" placeholder="Поиск: системы, модели, задачи, инструменты, правила" data-i18n-placeholder="search.placeholder" autocomplete="off">
+        </label>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Разделы" data-i18n-aria="tabs.aria">
+        <button type="button" role="tab" class="tab" data-tab="systems" id="tab-systems" aria-controls="view-systems" data-i18n="tabs.systems">Системы</button>
+        <button type="button" role="tab" class="tab" data-tab="matrix" id="tab-matrix" aria-controls="view-matrix" data-i18n="tabs.matrix">Матрица</button>
+        <button type="button" role="tab" class="tab" data-tab="recommend" id="tab-recommend" aria-controls="view-recommend" data-i18n="tabs.recommend">Кому дать задачу</button>
+        <button type="button" role="tab" class="tab" data-tab="settings" id="tab-settings" aria-controls="view-settings" data-i18n="tabs.settings">Настройки</button>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section id="view-systems" class="view" role="tabpanel" aria-labelledby="tab-systems" hidden></section>
+      <section id="view-matrix" class="view" role="tabpanel" aria-labelledby="tab-matrix" hidden></section>
+      <section id="view-recommend" class="view" role="tabpanel" aria-labelledby="tab-recommend" hidden></section>
+      <section id="view-settings" class="view" role="tabpanel" aria-labelledby="tab-settings" hidden></section>
+    </main>
+  </div>
+
+  <!-- Модальное окно -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <form id="modal-form" novalidate>
+        <header class="modal-head">
+          <h2 id="modal-title"></h2>
+          <button type="button" class="btn btn-icon btn-ghost" data-modal-close aria-label="Закрыть" data-i18n-aria="buttons.close_aria">✕</button>
+        </header>
+        <div class="modal-body" id="modal-body"></div>
+        <p id="modal-error" class="form-error" role="alert" hidden></p>
+        <footer class="modal-foot">
+          <button type="button" class="btn" data-modal-close data-i18n="buttons.cancel">Отмена</button>
+          <button type="submit" class="btn btn-primary" id="modal-submit" data-i18n="buttons.save">Сохранить</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <!-- Уведомления -->
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

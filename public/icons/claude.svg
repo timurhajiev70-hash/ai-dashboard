@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">Claude</title>
+  <path fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" d="m24 4 19 20-19 20L5 24z"/>
+  <path fill="#D97757" d="M32 16.5a12 12 0 1 0 0 15l-3-2.3a8.2 8.2 0 1 1 0-10.4z"/>
+</svg>
