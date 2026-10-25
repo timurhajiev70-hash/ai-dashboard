@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fokus</title>
+<style>
+/* ============================================================
+   Fokus — тёмная тема, крупный текст. Цвета групп — AGENTS.md §8.
+   Структура: координатор (Fable). Стиль можно править отдельно (Argon):
+   весь CSS — в этом блоке, разметка строится в JS ниже через el().
+   ============================================================ */
+:root {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --surface-2: #21252e;
+  --border: #2a2f3a;
+  --text: #f5f5f7;
+  --muted: #9aa0ab;
+  --accent: #4f8cff;
+  --ok: #22c55e;
+  --danger: #e5484d;
+  --g-now: #e5484d;
+  --g-priority: #f5a623;
+  --g-queue: #3b82f6;
+  --g-delegate: #d4d4d8;
+  --g-someday: #52525b;
+  --g-waiting: #8b5cf6;
+  --radius: 14px;
+  --fs: 18px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+body {
+  font: var(--fs)/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+a { color: var(--accent); }
+
+.app { max-width: 980px; margin: 0 auto; padding: 16px 16px 96px; }
+header.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 2px 14px; }
+header.top h1 { margin: 0; font-size: 28px; letter-spacing: .5px; }
+header.top .date { color: var(--muted); font-size: 16px; }
+
+nav.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+nav.tabs button {
+  flex: 1 1 120px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 10px; font-size: 17px; font-weight: 600; color: var(--muted);
+}
+nav.tabs button.active { color: var(--text); border-color: var(--accent); background: var(--surface-2); }
+nav.tabs button .cnt { display: inline-block; margin-left: 6px; font-size: 13px; color: var(--muted); }
+
+section.screen { display: none; }
+section.screen.active { display: block; }
+h2 { font-size: 26px; margin: 4px 0 16px; }
+h3 { font-size: 20px; margin: 18px 0 10px; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+.stack { display: flex; flex-direction: column; gap: 10px; }
+
+.btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px; font-size: 17px; font-weight: 600; }
+.btn:hover { border-color: #3a4150; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #06240f; }
+.btn.danger { color: #ffb4b6; border-color: #5a2a2d; }
+.btn.small { font-size: 15px; padding: 7px 12px; border-radius: 10px; font-weight: 500; }
+.btn.ghost { background: transparent; }
+.btn.big { font-size: 20px; padding: 16px 20px; width: 100%; text-align: left; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+
+/* --- Сегодня ----------------------------------------------------- */
+.today-card { position: relative; display: grid; grid-template-columns: 56px 1fr auto; gap: 14px; align-items: start;
+  background: var(--surface); border: 1px solid var(--border); border-left: 8px solid var(--g-now); border-radius: var(--radius); padding: 20px 20px 16px; margin-bottom: 14px; }
+.today-card .num { font-size: 40px; font-weight: 800; color: var(--muted); line-height: 1; opacity: .6; }
+.today-card .title { font-size: 30px; font-weight: 700; line-height: 1.2; word-break: break-word; }
+.today-card.done .title { text-decoration: line-through; color: var(--muted); }
+.today-card .meta { margin-top: 8px; color: var(--muted); font-size: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+.today-card .actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.check { width: 56px; height: 56px; border-radius: 16px; border: 2px solid var(--border); background: var(--surface-2); font-size: 28px; display: grid; place-items: center; }
+.check.on { background: var(--ok); border-color: var(--ok); color: #06240f; }
+.counter { font-size: 18px; color: var(--muted); }
+.empty { padding: 28px 18px; text-align: center; color: var(--muted); font-size: 20px; border: 1px dashed var(--border); border-radius: var(--radius); }
+
+/* --- Строка задачи (доска, фильтры, кандидаты) -------------------- */
+.task { display: grid; grid-template-columns: 1fr auto; gap: 10px 14px; align-items: center; padding: 12px 14px; margin-bottom: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--border); border-radius: 12px; }
+.task .t { font-size: 19px; font-weight: 600; word-break: break-word; }
+.task.done .t { text-decoration: line-through; color: var(--muted); }
+.task .m { color: var(--muted); font-size: 15px; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; align-items: center; }
+.task .a { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.task .note { color: var(--muted); font-size: 15px; margin-top: 4px; white-space: pre-wrap; }
+.score { font-weight: 700; color: var(--text); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 13px; border: 1px solid var(--border); color: var(--muted); }
+.badge.warn { color: #ffd38a; border-color: #6b4e14; }
+.badge.alert { color: #ffb4b6; border-color: #6b2a2d; }
+.badge.ok { color: #9fe8b4; border-color: #1f5a2f; }
+.badge.grp { color: var(--text); }
+
+/* группы */
+.g-now { border-left-color: var(--g-now) !important; }
+.g-priority { border-left-color: var(--g-priority) !important; }
+.g-queue { border-left-color: var(--g-queue) !important; }
+.g-delegate { border-left-color: var(--g-delegate) !important; }
+.g-someday { border-left-color: var(--g-someday) !important; }
+.g-waiting { border-left-color: var(--g-waiting) !important; }
+.dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+.dot.now { background: var(--g-now); } .dot.priority { background: var(--g-priority); } .dot.queue { background: var(--g-queue); }
+.dot.delegate { background: var(--g-delegate); } .dot.someday { background: var(--g-someday); } .dot.waiting { background: var(--g-waiting); }
+
+.group { margin-bottom: 22px; }
+.group-head { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px 8px; border-bottom: 2px solid var(--border); margin-bottom: 10px; }
+.group-head h3 { margin: 0; font-size: 21px; }
+.group-head .cnt { font-size: 18px; color: var(--muted); }
+.group-head .desc { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; }
+
+/* --- Мастер -------------------------------------------------------- */
+.wizard { max-width: 720px; }
+.wizard .q { font-size: 28px; font-weight: 700; margin: 10px 0 18px; line-height: 1.25; }
+.opts { display: grid; gap: 10px; }
+.opt { text-align: left; font-size: 20px; padding: 16px 18px; border-radius: 14px; background: var(--surface); border: 2px solid var(--border); }
+.opt:hover { border-color: #3a4150; }
+.opt.sel { border-color: var(--accent); background: var(--surface-2); }
+.step { color: var(--muted); font-size: 15px; letter-spacing: .5px; text-transform: uppercase; }
+.progress { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin: 8px 0 18px; }
+.progress > div { height: 100%; background: var(--accent); transition: width .2s; }
+label.f { display: block; color: var(--muted); font-size: 15px; margin: 12px 0 6px; }
+input.wide, textarea.wide { width: 100%; font-size: 20px; }
+.summary { text-align: center; padding: 26px 18px; }
+.summary .grp { font-size: 30px; font-weight: 800; }
+.summary .sc { font-size: 64px; font-weight: 800; line-height: 1; margin: 10px 0 6px; }
+.summary .hints { margin: 16px auto 0; max-width: 520px; text-align: left; display: grid; gap: 8px; }
+.summary .hints div { background: var(--surface-2); border-radius: 10px; padding: 10px 14px; }
+
+/* --- Настройки ------------------------------------------------------ */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.field label { display: block; color: var(--muted); font-size: 15px; margin-bottom: 4px; }
+.field input, .field select { width: 100%; }
+table.journal { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.journal th, table.journal td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.journal th { color: var(--muted); font-weight: 600; }
+
+/* --- Модалка, тост -------------------------------------------------- */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; z-index: 50; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; width: min(640px, 100%); max-height: 90vh; overflow: auto; }
+.modal h3 { margin: 0 0 12px; font-size: 22px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #262b36; border: 1px solid var(--border); color: var(--text);
+  padding: 12px 18px; border-radius: 12px; font-size: 17px; max-width: min(640px, 92vw); z-index: 60; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+.toast.err { border-color: var(--danger); }
+.toast.ok { border-color: var(--ok); }
+
+@media (max-width: 640px) {
+  :root { --fs: 17px; }
+  .today-card { grid-template-columns: 1fr; }
+  .today-card .num { display: none; }
+  .today-card .title { font-size: 26px; }
+  .today-card .actions { flex-direction: row; }
+  .task { grid-template-columns: 1fr; }
+  .task .a { justify-content: flex-start; }
+  .group-head .desc { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1 id="app-title">Fokus</h1>
+    <div class="date" id="app-date"></div>
+  </header>
+  <nav class="tabs" id="tabs"></nav>
+
+  <section class="screen" id="screen-today"></section>
+  <section class="screen" id="screen-add"></section>
+  <section class="screen" id="screen-board"></section>
+  <section class="screen" id="screen-filters"></section>
+  <section class="screen" id="screen-settings"></section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------ состояние
+  const GROUPS = ['now', 'priority', 'queue', 'delegate', 'someday', 'waiting'];
+  const ICON = { now: '🔴', priority: '🟠', queue: '🔵', delegate: '⚪', someday: '⚫', waiting: '⏸' };
+  const SCREENS = ['today', 'add', 'board', 'filters', 'settings'];
+  const state = {
+    lang: 'ru', L: {}, settings: null, today: null, screen: 'today', sort: 'score',
+    counts: null, wiz: null, filters: { group: '', due: '', who: '', duration: '', status: 'open' }, serverToday: ''
+  };
+
+  // ------------------------------------------------------------ утилиты
+  const $ = (s) => document.querySelector(s);
+  function t(key, vars) {
+    let s = state.L[key];
+    if (s === undefined) s = key;
+    if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k]));
+    return s;
+  }
+  function el(tag, attrs) {
+    const e = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      const v = attrs[k];
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') e.className = v;
+      else if (k === 'text') e.textContent = v;
+      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    }
+    for (let i = 2; i < arguments.length; i++) append(e, arguments[i]);
+    return e;
+  }
+  function append(parent, child) {
+    if (child === null || child === undefined || child === false) return;
+    if (Array.isArray(child)) { child.forEach((c) => append(parent, c)); return; }
+    parent.appendChild(typeof child === 'string' || typeof child === 'number' ? document.createTextNode(String(child)) : child);
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+
+  async function api(method, path, body) {
+    let res;
+    try {
+      res = await fetch(path, {
+        method: method,
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+        body: body !== undefined ? JSON.stringify(body) : undefined
+      });
+    } catch (e) {
+      throw { status: 0, data: { error: 'network', message: t('error_network') } };
+    }
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = { error: 'bad_response', message: res.statusText }; }
+    if (!res.ok) throw { status: res.status, data: data || {} };
+    return data;
+  }
+
+  let toastTimer = null;
+  function toast(msg, kind) {
+    const old = $('.toast'); if (old) old.remove();
+    const node = el('div', { class: 'toast ' + (kind || '') , text: msg });
+    document.body.appendChild(node);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => node.remove(), 3500);
+  }
+  function showError(err) {
+    const d = (err && err.data) || {};
+    let msg = d.message || d.error || String(err);
+    if (d.error === 'validation' && d.field) msg = t('settings_invalid', { field: d.field });
+    toast(t('error_generic', { message: msg }), 'err');
+  }
+
+  function modal(title, body, buttons) {
+    const box = el('div', { class: 'modal' }, el('h3', { text: title }), body);
+    const overlay = el('div', { class: 'overlay', onclick: (ev) => { if (ev.target === overlay) close(); } }, box);
+    const bar = el('div', { class: 'row', style: 'margin-top:16px;justify-content:flex-end' });
+    (buttons || [{ label: t('btn_close') }]).forEach((b) => {
+      bar.appendChild(el('button', { class: 'btn ' + (b.cls || ''), text: b.label, onclick: () => { if (b.onclick) b.onclick(); if (!b.keep) close(); } }));
+    });
+    box.appendChild(bar);
+    document.body.appendChild(overlay);
+    function close() { overlay.remove(); }
+    return close;
+  }
+
+  function groupLabel(g) { return ICON[g] + ' ' + t('group_' + g); }
+  function dueLabel(task) {
+    if (task.days_left === null || task.days_left === undefined) return t('no_deadline');
+    const n = task.days_left;
+    if (n < 0) return t('due_overdue', { n: -n });
+    if (n === 0) return t('due_today');
+    if (n === 1) return t('due_tomorrow');
+    return t('due_in_days', { n: n });
+  }
+  function durLabel(d) { return t('dur_' + d); }
+  function whoLabel(task) {
+    if (task.who === 'delegate') return task.delegate_to ? t('who_delegate_to', { name: task.delegate_to }) : t('who_delegate');
+    return t('who_me');
+  }
+  function fmtScore(s) { return Number(s).toFixed(1); }
+  function fmtTs(ts) { return String(ts || '').replace('T', ' ').slice(0, 16); }
+
+  function badges(task, opts) {
+    opts = opts || {};
+    const out = [];
+    if (opts.group) out.push(el('span', { class: 'badge grp' }, el('span', { class: 'dot ' + task.group }), t('group_' + task.group)));
+    if (task.is_today && !opts.noToday) out.push(el('span', { class: 'badge ok', text: t('today_badge') }));
+    if (task.status === 'done') out.push(el('span', { class: 'badge ok', text: t('done_badge') }));
+    if (task.group_manual) out.push(el('span', { class: 'badge', text: t('manual_badge') }));
+    if (task.carry_count > 0) out.push(el('span', { class: 'badge warn', text: t('carried_badge', { n: task.carry_count }) }));
+    if (task.needs_review) out.push(el('span', { class: 'badge alert', text: t('review_badge') }));
+    if (task.depends_on) out.push(el('span', { class: 'badge', text: t('depends_prefix', { text: task.depends_on }) }));
+    return out;
+  }
+
+  // ------------------------------------------------------------ действия над задачей
+  async function markDone(task) {
+    try { await api('POST', '/api/tasks/' + task.id + (task.status === 'done' ? '/reopen' : '/done')); await refreshCurrent(); }
+    catch (e) { showError(e); }
+  }
+  async function deleteTask(task) {
+    if (!window.confirm(t('confirm_delete', { title: task.title }))) return;
+    try { await api('DELETE', '/api/tasks/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+  }
+  function moveTask(task) {
+    const body = el('div', { class: 'opts' });
+    let close;
+    GROUPS.forEach((g) => {
+      body.appendChild(el('button', { class: 'opt ' + (g === task.group ? 'sel' : ''), disabled: g === task.group, onclick: async () => {
+        try {
+          await api('POST', '/api/tasks/' + task.id + '/move', { group: g });
+          toast(t('moved_toast', { group: groupLabel(g) }), 'ok');
+          close(); await refreshCurrent();
+        } catch (e) { showError(e); }
+      } }, el('span', { class: 'dot ' + g }), t('group_' + g)));
+    });
+    close = modal(t('move_title', { title: task.title }), body, [{ label: t('btn_cancel') }]);
+  }
+  async function addToToday(task, replaceId) {
+    const body = { task_id: task.id };
+    if (replaceId) body.replace_id = replaceId;
+    try {
+      await api('POST', '/api/today', body);
+      await refreshCurrent();
+      return true;
+    } catch (e) {
+      if (e.status === 409 && e.data && e.data.error === 'day_full') { offerReplace(task, e.data); return false; }
+      showError(e); return false;
+    }
+  }
+  function offerReplace(task, info) {
+    const open = (info.tasks || []).filter((x) => x.status === 'open');
+    if (!open.length) { toast(t('today_all_done'), 'ok'); return; }
+    const body = el('div', {}, el('p', { class: 'muted', text: t('today_full_text') }), el('p', { text: t('today_replace_with', { title: task.title }) }));
+    const list = el('div', { class: 'opts' });
+    let close;
+    open.forEach((x) => {
+      list.appendChild(el('button', { class: 'opt', onclick: async () => { close(); await addToToday(task, x.id); } }, x.title,
+        el('div', { class: 'muted', style: 'font-size:15px' }, fmtScore(x.score) + ' · ' + dueLabel(x))));
+    });
+    body.appendChild(list);
+    close = modal(t('today_full_title', { limit: info.limit }), body, [{ label: t('btn_cancel') }]);
+  }
+  async function removeFromToday(task) {
+    try { await api('DELETE', '/api/today/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+  }
+
+  function taskRow(task, opts) {
+    opts = opts || {};
+    const meta = el('div', { class: 'm' },
+      el('span', { class: 'score', text: fmtScore(task.score) }), '·', dueLabel(task), '·', durLabel(task.duration), '·', whoLabel(task), badges(task, opts));
+    const actions = el('div', { class: 'a' });
+    if (task.status === 'open') {
+      if (task.group === 'now' && !task.is_today && opts.allowToday !== false)
+        actions.appendChild(el('button', { class: 'btn small primary', text: t('btn_to_today'), onclick: () => addToToday(task) }));
+      if (task.is_today) actions.appendChild(el('button', { class: 'btn small ghost', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }));
+      actions.appendChild(el('button', { class: 'btn small', text: '✓ ' + t('btn_done'), onclick: () => markDone(task) }));
+      actions.appendChild(el('button', { class: 'btn small', text: '⇄ ' + t('btn_move'), onclick: () => moveTask(task) }));
+      actions.appendChild(el('button', { class: 'btn small ' + (task.needs_review ? 'primary' : ''), text: '↻ ' + t('btn_reeval'), onclick: () => startWizard('reeval', task) }));
+    } else {
+      actions.appendChild(el('button', { class: 'btn small', text: t('btn_undo'), onclick: () => markDone(task) }));
+    }
+    actions.appendChild(el('button', { class: 'btn small danger ghost', text: '🗑', title: t('btn_delete'), onclick: () => deleteTask(task) }));
+    return el('div', { class: 'task g-' + task.group + (task.status === 'done' ? ' done' : '') },
+      el('div', {}, el('div', { class: 't', text: task.title }), task.note ? el('div', { class: 'note', text: task.note }) : null, meta), actions);
+  }
+
+  // ------------------------------------------------------------ навигация
+  function renderTabs() {
+    const nav = clear($('#tabs'));
+    SCREENS.forEach((s) => {
+      const b = el('button', { class: s === state.screen ? 'active' : '', onclick: () => show(s) }, t('nav_' + s));
+      if (s === 'board' && state.counts) {
+        const total = GROUPS.reduce((a, g) => a + (state.counts[g] || 0), 0);
+        b.appendChild(el('span', { class: 'cnt', text: String(total) }));
+      }
+      nav.appendChild(b);
+    });
+  }
+  async function show(screen) {
+    state.screen = screen;
+    SCREENS.forEach((s) => $('#screen-' + s).classList.toggle('active', s === screen));
+    renderTabs();
+    await refreshCurrent();
+    window.scrollTo(0, 0);
+  }
+  async function refreshCurrent() {
+    try {
+      if (state.screen === 'today') await renderToday();
+      else if (state.screen === 'add') renderAdd();
+      else if (state.screen === 'board') await renderBoard();
+      else if (state.screen === 'filters') await renderFilters();
+      else if (state.screen === 'settings') await renderSettings();
+    } catch (e) { showError(e); }
+  }
+
+  // ------------------------------------------------------------ экран 1: Сегодня
+  async function renderToday() {
+    const d = await api('GET', '/api/today');
+    state.today = d;
+    state.serverToday = d.date;
+    $('#app-date').textContent = d.date;
+    const root = clear($('#screen-today'));
+    const openCount = d.tasks.filter((x) => x.status === 'open').length;
+    root.appendChild(el('div', { class: 'row spread' },
+      el('h2', { text: t('today_title') }),
+      el('div', { class: 'counter', text: t('today_counter', { n: d.tasks.length, limit: d.limit }) })));
+
+    if (!d.tasks.length) {
+      root.appendChild(el('div', { class: 'empty', text: t('today_empty', { limit: d.limit }) }));
+    }
+    d.tasks.forEach((task, i) => {
+      const meta = el('div', { class: 'meta' },
+        el('span', { class: 'score', text: fmtScore(task.score) }), dueLabel(task), durLabel(task.duration), whoLabel(task), badges(task, { noToday: true }));
+      const actions = el('div', { class: 'actions' },
+        el('button', { class: 'check' + (task.status === 'done' ? ' on' : ''), title: t('btn_done'), onclick: () => markDone(task) }, '✓'),
+        task.status === 'open' ? el('button', { class: 'btn small ghost', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }) : null);
+      const card = el('div', { class: 'today-card' + (task.status === 'done' ? ' done' : '') },
+        el('div', { class: 'num', text: String(i + 1) }),
+        el('div', {}, el('div', { class: 'title', text: task.title }), task.note ? el('div', { class: 'note muted', text: task.note }) : null, meta,
+          task.needs_review ? el('div', { class: 'row', style: 'margin-top:10px' },
+            el('span', { class: 'muted', text: t('today_review_hint', { n: task.carry_count }) }),
+            el('button', { class: 'btn small primary', text: t('btn_reeval'), onclick: () => startWizard('reeval', task) })) : null),
+        actions);
+      root.appendChild(card);
+    });
+    if (d.tasks.length && openCount === 0) root.appendChild(el('p', { class: 'muted', style: 'font-size:20px;text-align:center', text: t('today_all_done') }));
+
+    // кандидаты из 🔴
+    const candBox = el('div', { style: 'margin-top:18px' });
+    const btn = el('button', { class: 'btn primary', text: t('today_add_from_now'), onclick: () => {
+      list.style.display = list.style.display === 'none' ? 'block' : 'none';
+    } });
+    const list = el('div', { style: 'display:none;margin-top:12px' });
+    if (d.candidates.length) {
+      list.appendChild(el('h3', { text: t('today_candidates_title') }));
+      d.candidates.forEach((c) => list.appendChild(taskRow(c, {})));
+    } else {
+      list.appendChild(el('div', { class: 'empty', text: t('today_no_candidates') }));
+    }
+    if (!d.tasks.length) list.style.display = 'block';
+    candBox.appendChild(btn); candBox.appendChild(list);
+    root.appendChild(candBox);
+  }
+
+  // ------------------------------------------------------------ экран 2: Добавить (мастер)
+  const STEPS = [
+    { key: 'importance', q: 'q_importance', opts: [1, 2, 3, 4, 5].map((n) => ({ v: n, l: 'imp_' + n })) },
+    { key: 'due', q: 'q_due', opts: ['today', 'tomorrow', 'week', 'month', 'none'].map((v) => ({ v: v, l: 'due_opt_' + v })) },
+    { key: 'consequence', q: 'q_consequence', opts: ['none', 'unpleasant', 'serious'].map((v) => ({ v: v, l: 'cons_' + v })) },
+    { key: 'who', q: 'q_who', opts: [{ v: 'me', l: 'who_opt_me' }, { v: 'delegate', l: 'who_opt_delegate', input: 'delegate_to', label: 'delegate_to_label' }] },
+    { key: 'duration', q: 'q_duration', opts: ['5m', '30m', '2h', 'half_day'].map((v) => ({ v: v, l: 'dur_' + v })) },
+    { key: 'depends', q: 'q_depends', opts: [{ v: 'no', l: 'dep_no' }, { v: 'yes', l: 'dep_yes', input: 'depends_on', label: 'depends_placeholder' }] }
+  ];
+
+  function startWizard(mode, task) {
+    state.wiz = {
+      mode: mode, task: task || null, step: 0,
+      title: task ? task.title : '', note: task ? task.note : '',
+      answers: task ? {
+        importance: task.importance, due: task.due, consequence: task.consequence, who: task.who,
+        delegate_to: task.delegate_to || '', duration: task.duration, depends: task.depends_on ? 'yes' : 'no', depends_on: task.depends_on || ''
+      } : {}
+    };
+    if (mode === 'reeval') state.wiz.step = 1;
+    show('add');
+  }
+
+  function renderAdd() {
+    if (!state.wiz) state.wiz = { mode: 'new', task: null, step: 0, title: '', note: '', answers: {} };
+    const w = state.wiz;
+    const root = clear($('#screen-add'));
+    const box = el('div', { class: 'wizard' });
+    root.appendChild(box);
+    box.appendChild(el('h2', { text: w.mode === 'reeval' ? t('reeval_title', { title: w.title }) : t('add_title') }));
+
+    if (w.step === 0) {
+      const title = el('input', { class: 'wide', type: 'text', maxlength: '200', placeholder: t('add_name_placeholder'), value: w.title });
+      const note = el('textarea', { class: 'wide', rows: '2', placeholder: '' }); note.value = w.note;
+      box.appendChild(el('label', { class: 'f', text: t('add_name_label') })); box.appendChild(title);
+      box.appendChild(el('label', { class: 'f', text: t('add_note_label') })); box.appendChild(note);
+      const next = () => {
+        w.title = title.value.trim(); w.note = note.value.trim();
+        if (!w.title) { toast(t('add_name_required'), 'err'); title.focus(); return; }
+        w.step = 1; renderAdd();
+      };
+      title.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') next(); });
+      box.appendChild(el('div', { class: 'row', style: 'margin-top:16px' }, el('button', { class: 'btn primary', text: t('btn_next'), onclick: next })));
+      setTimeout(() => title.focus(), 0);
+      return;
+    }
+
+    if (w.step >= 1 && w.step <= 6) {
+      const step = STEPS[w.step - 1];
+      box.appendChild(el('div', { class: 'step', text: t('wizard_step', { n: w.step }) }));
+      box.appendChild(el('div', { class: 'progress' }, el('div', { style: 'width:' + Math.round(w.step / 6 * 100) + '%' })));
+      box.appendChild(el('div', { class: 'q', text: t(step.q) }));
+      const opts = el('div', { class: 'opts' });
+      let extra = null;
+      const current = w.answers[step.key];
+      step.opts.forEach((o) => {
+        const b = el('button', { class: 'opt' + (String(current) === String(o.v) ? ' sel' : ''), onclick: () => {
+          w.answers[step.key] = o.v;
+          if (o.input) { renderAdd(); } else { if (step.key === 'who') w.answers.delegate_to = ''; if (step.key === 'depends') w.answers.depends_on = ''; w.step++; renderAdd(); }
+        } }, t(o.l));
+        opts.appendChild(b);
+        if (o.input && String(current) === String(o.v)) {
+          const inp = el('input', { class: 'wide', type: 'text', maxlength: step.key === 'who' ? '200' : '500', placeholder: t(o.label), value: w.answers[o.input] || '' });
+          inp.addEventListener('input', () => { w.answers[o.input] = inp.value; });
+          inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { w.step++; renderAdd(); } });
+          extra = el('div', {}, el('label', { class: 'f', text: t(o.label) }), inp,
+            el('div', { class: 'row', style: 'margin-top:12px' }, el('button', { class: 'btn primary', text: t('btn_next'), onclick: () => { w.step++; renderAdd(); } })));
+          setTimeout(() => inp.focus(), 0);
+        }
+      });
+      box.appendChild(opts);
+      if (extra) box.appendChild(extra);
+      box.appendChild(el('div', { class: 'row', style: 'margin-top:18px' },
+        el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), onclick: () => { if (w.step === 1 && w.mode === 'reeval') { state.wiz = null; show('board'); return; } w.step--; renderAdd(); } }),
+        el('button', { class: 'btn ghost', text: t('btn_cancel'), onclick: () => { state.wiz = null; show(w.mode === 'reeval' ? 'board' : 'today'); } })));
+      return;
+    }
+
+    // шаг 7: итог
+    renderSummary(box);
+  }
+
+  function wizardAnswers() {
+    const a = state.wiz.answers;
+    return {
+      importance: a.importance, due: a.due, consequence: a.consequence, who: a.who,
+      delegate_to: a.who === 'delegate' ? (a.delegate_to || '') : '',
+      duration: a.duration, depends_on: a.depends === 'yes' ? (a.depends_on || '') : ''
+    };
+  }
+
+  async function renderSummary(box) {
+    const w = state.wiz;
+    const answers = wizardAnswers();
+    const panel = el('div', { class: 'card summary' }, el('div', { class: 'muted', text: t('loading') }));
+    box.appendChild(panel);
+    let preview;
+    try { preview = await api('POST', '/api/tasks/preview', { answers: answers }); }
+    catch (e) { showError(e); w.step = 1; renderAdd(); return; }
+    clear(panel);
+    panel.appendChild(el('div', { class: 'step', text: t('summary_title') }));
+    panel.appendChild(el('div', { class: 'grp' }, el('span', { class: 'dot ' + preview.group }), groupLabel(preview.group)));
+    panel.appendChild(el('div', { class: 'sc', text: fmtScore(preview.score) }));
+    panel.appendChild(el('div', { class: 'muted', text: t('summary_score') + ' · ' + t('group_' + preview.group + '_desc') }));
+    const hints = el('div', { class: 'hints' });
+    (preview.hints || []).forEach((h) => {
+      let txt;
+      if (h === 'delegate') txt = answers.delegate_to ? t('hint_delegate', { name: answers.delegate_to }) : t('hint_delegate_nobody');
+      else if (h === 'waiting') txt = t('hint_waiting', { text: answers.depends_on });
+      else txt = t('hint_' + h);
+      hints.appendChild(el('div', { text: txt }));
+    });
+    if (hints.childNodes.length) panel.appendChild(hints);
+    panel.appendChild(el('div', { class: 'row', style: 'margin-top:20px;justify-content:center' },
+      el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), onclick: () => { w.step = 6; renderAdd(); } }),
+      el('button', { class: 'btn primary', text: t('btn_save'), onclick: saveWizard })));
+  }
+
+  async function saveWizard() {
+    const w = state.wiz;
+    const answers = wizardAnswers();
+    try {
+      if (w.mode === 'reeval') {
+        const r = await api('POST', '/api/tasks/' + w.task.id + '/evaluate', { answers: answers });
+        toast(t('summary_reeval_saved', { group: groupLabel(r.task.group), score: fmtScore(r.task.score) }), 'ok');
+        state.wiz = null; show('board');
+        return;
+      }
+      const r = await api('POST', '/api/tasks', { title: w.title, note: w.note, answers: answers });
+      const task = r.task;
+      toast(t('summary_saved', { title: task.title, group: groupLabel(task.group), score: fmtScore(task.score) }), 'ok');
+      state.wiz = null;
+      if (task.group === 'now') {
+        modal(t('summary_saved_today_offer'), el('p', { text: task.title }), [
+          { label: t('btn_cancel'), onclick: () => show('board') },
+          { label: t('btn_to_today'), cls: 'primary', onclick: async () => { state.screen = 'today'; const ok = await addToToday(task); show('today'); } }
+        ]);
+      } else {
+        show('board');
+      }
+    } catch (e) { showError(e); }
+  }
+
+  // ------------------------------------------------------------ экран 3: Доска
+  async function renderBoard() {
+    const d = await api('GET', '/api/board?sort=' + encodeURIComponent(state.sort));
+    const root = clear($('#screen-board'));
+    state.counts = {}; GROUPS.forEach((g) => { state.counts[g] = d.groups[g] ? d.groups[g].count : 0; });
+    renderTabs();
+    const sortSel = el('select', { onchange: (ev) => { state.sort = ev.target.value; renderBoard(); } },
+      ['score', 'due', 'created'].map((s) => el('option', { value: s, selected: s === state.sort }, t('sort_' + s))));
+    root.appendChild(el('div', { class: 'row spread' }, el('h2', { text: t('board_title') }), el('div', { class: 'row' }, el('span', { class: 'muted', text: t('board_sort') }), sortSel)));
+
+    if (d.review && d.review.length) {
+      const rv = el('div', { class: 'card', style: 'border-color:#6b2a2d;margin-bottom:20px' },
+        el('h3', { style: 'margin-top:0', text: t('board_review_title', { n: d.review.length }) }),
+        el('p', { class: 'muted', text: t('board_review_text') }));
+      d.review.forEach((task) => {
+        const reason = task.review_reason === 'carried' ? t('review_reason_carried', { n: task.carry_count }) : t('review_reason_stale', { date: String(task.evaluated_at || '').slice(0, 10) });
+        rv.appendChild(el('div', { class: 'row spread', style: 'padding:8px 0;border-top:1px solid var(--border)' },
+          el('div', {}, el('div', { style: 'font-weight:600' }, el('span', { class: 'dot ' + task.group }), task.title), el('div', { class: 'muted', style: 'font-size:15px', text: reason })),
+          el('button', { class: 'btn small primary', text: '↻ ' + t('btn_reeval'), onclick: () => startWizard('reeval', task) })));
+      });
+      root.appendChild(rv);
+    }
+
+    GROUPS.forEach((g) => {
+      const grp = d.groups[g] || { count: 0, tasks: [] };
+      const sec = el('div', { class: 'group' },
+        el('div', { class: 'group-head' }, el('span', { class: 'dot ' + g }), el('h3', { text: t('group_' + g) }), el('span', { class: 'cnt', text: String(grp.count) }),
+          el('span', { class: 'desc', text: t('group_' + g + '_desc') })));
+      if (!grp.tasks.length) sec.appendChild(el('div', { class: 'muted', style: 'padding:4px 2px 2px', text: t('empty_list') }));
+      grp.tasks.forEach((task) => sec.appendChild(taskRow(task, {})));
+      root.appendChild(sec);
+    });
+  }
+
+  // ------------------------------------------------------------ экран 4: Фильтры
+  async function renderFilters() {
+    const root = clear($('#screen-filters'));
+    root.appendChild(el('h2', { text: t('filters_title') }));
+    const f = state.filters;
+    function sel(name, labelKey, options) {
+      const s = el('select', { onchange: (ev) => { f[name] = ev.target.value; renderFilters(); } },
+        options.map((o) => el('option', { value: o.v, selected: o.v === f[name] }, o.l)));
+      return el('div', { class: 'field' }, el('label', { text: t(labelKey) }), s);
+    }
+    const any = { v: '', l: t('filter_any') };
+    root.appendChild(el('div', { class: 'grid2 card' },
+      sel('group', 'filter_group', [any].concat(GROUPS.map((g) => ({ v: g, l: groupLabel(g) })))),
+      sel('due', 'filter_due', [any].concat(['today', 'tomorrow', 'week', 'month', 'none'].map((v) => ({ v: v, l: t('due_opt_' + v) })))),
+      sel('who', 'filter_who', [any, { v: 'me', l: t('who_opt_me') }, { v: 'delegate', l: t('who_opt_delegate') }]),
+      sel('duration', 'filter_duration', [any].concat(['5m', '30m', '2h', 'half_day'].map((v) => ({ v: v, l: t('dur_' + v) })))),
+      sel('status', 'filter_status', [{ v: 'open', l: t('status_open') }, { v: 'done', l: t('status_done') }, { v: 'all', l: t('status_all') }])));
+    const qs = [];
+    ['group', 'due', 'who', 'duration', 'status'].forEach((k) => { if (f[k]) qs.push(k + '=' + encodeURIComponent(f[k])); });
+    const d = await api('GET', '/api/tasks?sort=score&' + qs.join('&'));
+    root.appendChild(el('h3', { text: t('filters_result', { n: d.tasks.length }) }));
+    if (!d.tasks.length) root.appendChild(el('div', { class: 'empty', text: t('empty_list') }));
+    d.tasks.forEach((task) => root.appendChild(taskRow(task, { group: true })));
+  }
+
+  // ------------------------------------------------------------ экран 5: Настройки
+  async function renderSettings() {
+    const s = await api('GET', '/api/settings');
+    state.settings = s;
+    const root = clear($('#screen-settings'));
+    root.appendChild(el('h2', { text: t('settings_title') }));
+    const inputs = {};
+    function num(path, labelKey, step, min, max) {
+      const parts = path.split('.');
+      const val = parts.length === 2 ? s[parts[0]][parts[1]] : s[parts[0]];
+      const inp = el('input', { type: 'number', step: step, min: min, max: max, value: val });
+      inputs[path] = inp;
+      return el('div', { class: 'field' }, el('label', { text: t(labelKey) }), inp);
+    }
+    root.appendChild(el('h3', { text: t('settings_weights') }));
+    root.appendChild(el('div', { class: 'grid2' },
+      num('weights.importance', 'w_importance', '0.05', '0', '10'), num('weights.urgency', 'w_urgency', '0.05', '0', '10'),
+      num('weights.consequence', 'w_consequence', '0.05', '0', '10'), num('weights.duration', 'w_duration', '0.05', '0', '10')));
+    root.appendChild(el('h3', { text: t('settings_thresholds') }));
+    root.appendChild(el('div', { class: 'grid2' },
+      num('thresholds.now', 'th_now', '1', '1', '100'), num('thresholds.priority', 'th_priority', '1', '1', '100'), num('thresholds.queue', 'th_queue', '1', '1', '100')));
+    root.appendChild(el('h3', { text: '' }));
+    const langSel = el('select', {}, [{ v: 'ru', l: 'Русский' }, { v: 'de', l: 'Deutsch' }].map((o) => el('option', { value: o.v, selected: o.v === s.language }, o.l)));
+    root.appendChild(el('div', { class: 'grid2' },
+      num('day_limit', 'settings_day_limit', '1', '1', '10'), num('stale_days', 'settings_stale_days', '1', '1', '90'), num('carry_limit', 'settings_carry_limit', '1', '1', '10'),
+      el('div', { class: 'field' }, el('label', { text: t('settings_language') }), langSel)));
+    root.appendChild(el('div', { class: 'row', style: 'margin-top:16px' },
+      el('button', { class: 'btn primary', text: t('btn_save'), onclick: async () => {
+        const patch = { weights: {}, thresholds: {} };
+        for (const path in inputs) {
+          const v = parseFloat(inputs[path].value);
+          const parts = path.split('.');
+          if (parts.length === 2) patch[parts[0]][parts[1]] = v; else patch[parts[0]] = v;
+        }
+        patch.language = langSel.value;
+        try {
+          const saved = await api('PUT', '/api/settings', patch);
+          toast(t('settings_saved'), 'ok');
+          if (saved.language !== state.lang) await loadLang(saved.language);
+          renderTabs(); await renderSettings();
+        } catch (e) { showError(e); }
+      } })));
+    root.appendChild(el('p', { class: 'muted', style: 'margin-top:20px;font-size:14px', text: t('settings_about') }));
+
+    // журнал
+    root.appendChild(el('h3', { text: t('settings_journal') }));
+    const j = await api('GET', '/api/journal?limit=50');
+    const table = el('table', { class: 'journal' }, el('thead', {}, el('tr', {},
+      el('th', { text: t('journal_ts') }), el('th', { text: t('journal_task') }), el('th', { text: t('journal_event') }), el('th', { text: t('journal_change') }))));
+    const tb = el('tbody');
+    (j.entries || []).forEach((e) => {
+      const change = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || '');
+      tb.appendChild(el('tr', {}, el('td', { text: fmtTs(e.ts) }), el('td', { text: e.title || ('#' + e.task_id) }), el('td', { text: t('ev_' + e.event) }), el('td', { text: change })));
+    });
+    table.appendChild(tb);
+    root.appendChild(table);
+  }
+
+  // ------------------------------------------------------------ язык, запуск
+  async function loadLang(lang) {
+    const d = await api('GET', '/api/i18n?lang=' + encodeURIComponent(lang));
+    state.L = d.strings || d; state.lang = d.lang || lang;
+    document.documentElement.lang = state.lang;
+    $('#app-title').textContent = t('app_title');
+    document.title = t('app_title');
+  }
+  async function init() {
+    try {
+      const s = await api('GET', '/api/settings');
+      state.settings = s;
+      await loadLang(s.language || 'ru');
+    } catch (e) { showError(e); }
+    renderTabs();
+    show('today');
+  }
+  init();
+})();
+</script>
+</body>
+</html>
