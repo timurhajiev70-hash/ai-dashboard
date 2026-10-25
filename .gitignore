@@ -4,3 +4,10 @@ data/.env
 data/.sessions.json
 data/server.log
 data/server.pid
+
+# Fokus
+fokus/data/*.db
+fokus/data/*.db-*
+fokus/data/backups/
+__pycache__/
+*.pyc
