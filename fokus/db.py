@@ -172,6 +172,8 @@ def _row_to_task(row: sqlite3.Row) -> Dict[str, Any]:
 def _fetch_row(conn: sqlite3.Connection, task_id: Any) -> sqlite3.Row:
     try:
         tid = int(task_id)
+        if not 0 < tid < 2 ** 63:
+            raise NotFound(task_id)
     except (TypeError, ValueError):
         raise NotFound(task_id)
     row = conn.execute('SELECT * FROM tasks WHERE id = ?', (tid,)).fetchone()
@@ -397,7 +399,7 @@ def update_settings(conn: sqlite3.Connection, patch: Dict[str, Any]) -> Dict[str
             for sub, sub_value in value.items():
                 if sub not in merged:
                     continue
-                if not _is_number(sub_value) or sub_value < 0:
+                if not _is_number(sub_value) or sub_value < 0 or sub_value > 1000:
                     raise ValueError(key)
                 merged[sub] = float(sub_value)
             if sum(merged.values()) <= 0:
@@ -410,7 +412,7 @@ def update_settings(conn: sqlite3.Connection, patch: Dict[str, Any]) -> Dict[str
             for sub, sub_value in value.items():
                 if sub not in merged:
                     continue
-                if not _is_number(sub_value):
+                if not _is_number(sub_value) or sub_value > 100:
                     raise ValueError(key)
                 merged[sub] = sub_value
             if not (merged['now'] > merged['priority'] > merged['queue'] > 0):
@@ -721,7 +723,7 @@ def apply_rollover(conn: sqlite3.Connection, plan: Dict[str, Any], today: Any, n
     plan = plan or {}
     ts = _ts(now)
     day = _dstr(today)
-    counters = {'carried': 0, 'review': 0, 'regrouped': 0, 'rescored': 0}
+    counters = {'carried': 0, 'review': 0, 'regrouped': 0, 'rescored': 0, 'cleared': 0}
 
     carry_ids = []  # type: List[int]
     for raw in plan.get('carry') or []:
@@ -733,7 +735,22 @@ def apply_rollover(conn: sqlite3.Connection, plan: Dict[str, Any], today: Any, n
     regroup = _plan_int_keys(plan.get('regroup'))
     rescore = _plan_int_keys(plan.get('rescore'))
 
+    clear_ids = []  # type: List[int]
+    for raw in plan.get('clear') or []:
+        try:
+            clear_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+
     with conn:
+        for tid in clear_ids:  # выполненные задачи прошедшего дня: снять с дня без переноса
+            row = conn.execute('SELECT * FROM tasks WHERE id = ?', (tid,)).fetchone()
+            if row is None or not row['is_today']:
+                continue
+            _update(conn, tid, {'is_today': 0, 'today_date': None}, ts)
+            _log(conn, tid, 'today_remove', '', row['today_date'] or '', 'day_end', ts)
+            counters['cleared'] += 1
+
         for tid in carry_ids:
             row = conn.execute('SELECT * FROM tasks WHERE id = ?', (tid,)).fetchone()
             if row is None:

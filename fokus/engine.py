@@ -112,10 +112,12 @@ def validate_answers(answers: dict) -> dict:
     try:
         if isinstance(raw_imp, str):
             raw_imp = raw_imp.strip()
+        if isinstance(raw_imp, float) and not math.isfinite(raw_imp):
+            raise ValueError('importance')
         importance = int(raw_imp)
         if isinstance(raw_imp, float) and raw_imp != importance:
             raise ValueError('importance')
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError('importance')
     if importance < 1 or importance > 5:
         raise ValueError('importance')
@@ -139,7 +141,7 @@ def validate_answers(answers: dict) -> dict:
         if value is None:
             return ''
         if not isinstance(value, str):
-            value = str(value)
+            raise ValueError(field)
         value = value.strip()
         if len(value) > limit:
             raise ValueError(field)
@@ -361,15 +363,22 @@ def can_add_today(today_tasks: List[dict], limit: int) -> bool:
 def plan_rollover(tasks: List[dict], today: date, settings: Optional[dict] = None) -> dict:
     """План действий при наступлении нового дня (чистая функция, см. AGENTS.md §5.6).
 
-    {'carry': [id], 'review': {id: reason}, 'regroup': {id: (old, new)}, 'rescore': {id: score}}
+    {'carry': [id], 'review': {id: reason}, 'regroup': {id: (old, new)}, 'rescore': {id: score},
+     'clear': [id]}   # clear — выполненные вчера задачи дня: снять is_today без переноса
     """
     cfg = merge_settings(settings)
     carry_limit = int(cfg['carry_limit'])
     stale_days = int(cfg['stale_days'])
-    plan = {'carry': [], 'review': {}, 'regroup': {}, 'rescore': {}}
+    plan = {'carry': [], 'review': {}, 'regroup': {}, 'rescore': {}, 'clear': []}
 
     for task in tasks:
-        if task.get('status', 'open') != 'open':
+        status = task.get('status', 'open')
+        if status == 'done':
+            done_day = parse_date(task.get('today_date'))
+            if int(task.get('is_today') or 0) == 1 and done_day is not None and done_day < today:
+                plan['clear'].append(task['id'])
+            continue
+        if status != 'open':
             continue
         tid = task['id']
         already_review = bool(task.get('needs_review'))

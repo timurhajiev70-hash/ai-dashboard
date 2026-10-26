@@ -16,6 +16,8 @@
 Переменные окружения: ``FOKUS_PORT`` (4321), ``FOKUS_DB`` (``<папка server.py>/data/fokus.db``), ``FOKUS_TODAY``.
 """
 import json
+import sqlite3
+import math
 import os
 import re
 import signal
@@ -145,23 +147,35 @@ def _json_bytes(payload: Any) -> bytes:
 
 # --------------------------------------------------------------------------- валидация входа
 
+def _reject_constant(name: str) -> Any:
+    raise ValueError('JSON: %s недопустимо' % name)
+
+
 def _as_task_id(value: Any, field: str) -> int:
     """Целый id из JSON (int, целый float или строка цифр); иначе 400 validation."""
     if isinstance(value, bool):
         raise _validation(field)
+    result = None
     if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
-    raise _validation(field)
+        result = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        result = int(value)
+    elif isinstance(value, str) and value.strip().isdigit():
+        result = int(value.strip())
+    if result is None or not 0 < result < 2 ** 63:
+        raise _validation(field)
+    return result
+
+
+_ZERO_WIDTH = re.compile(u'[\u200b\u200c\u200d\u2060\ufeff]')
 
 
 def _clean_title(value: Any) -> str:
     if not isinstance(value, str):
         raise _validation('title')
-    title = value.strip()
+    title = _ZERO_WIDTH.sub('', value).strip()
+    if not any(ch.isprintable() and not ch.isspace() for ch in title):
+        raise _validation('title', 'название не может быть пустым')
     if not 1 <= len(title) <= TITLE_MAX:
         raise _validation('title', 'название: 1..%d символов' % TITLE_MAX)
     return title
@@ -354,7 +368,7 @@ class App(object):
         if not body_bytes or not body_bytes.strip():
             return None
         try:
-            data = json.loads(body_bytes.decode('utf-8'))
+            data = json.loads(body_bytes.decode('utf-8'), parse_constant=_reject_constant)
         except (UnicodeDecodeError, ValueError):
             raise ApiError(400, 'bad_json', 'тело запроса — не JSON')
         if not isinstance(data, dict):
@@ -390,10 +404,11 @@ class App(object):
     # ------------------------------------------------------------------ rollover
 
     def run_rollover(self, day: date) -> Dict[str, Any]:
-        """Перенос дня на дату day: план по ВСЕМ открытым задачам → применение → счётчики."""
+        """Перенос дня на дату day: план по всем открытым и выполненным задачам → применение → счётчики.
+        Выполненные нужны, чтобы снять с дня вчерашние сделанные (plan['clear'])."""
         settings = db.get_settings(self.conn)
-        open_tasks = db.list_tasks(self.conn, status='open')
-        plan = engine.plan_rollover(open_tasks, day, settings)
+        tasks = db.list_tasks(self.conn, status='all')
+        plan = engine.plan_rollover(tasks, day, settings)
         counters = dict(db.apply_rollover(self.conn, plan, day, _now_for(day)))
         counters['today'] = day.isoformat()
         return counters
@@ -424,9 +439,19 @@ class App(object):
             return int(engine.DEFAULT_SETTINGS['day_limit'])
 
     def _task_or_404(self, task_id: Any) -> Dict[str, Any]:
-        task = db.get_task(self.conn, task_id)
+        try:
+            task = db.get_task(self.conn, task_id)
+        except (OverflowError, sqlite3.Error):
+            task = None
         if task is None:
             raise _not_found('задача не найдена')
+        return task
+
+    def _live_task_or_404(self, task_id: Any) -> Dict[str, Any]:
+        """Для изменяющих операций: удалённая задача = не найдена (§9 п.12)."""
+        task = self._task_or_404(task_id)
+        if task.get('status') == 'deleted':
+            raise _not_found('задача удалена')
         return task
 
     def _tasks(self, tasks: List[Dict[str, Any]], day: date) -> List[Dict[str, Any]]:
@@ -460,7 +485,8 @@ class App(object):
         return self._settings()
 
     def h_settings_put(self, req: Request, m: Any) -> Dict[str, Any]:
-        patch = req.json_object()
+        patch = dict(req.json_object())
+        patch.pop('last_rollover', None)  # служебное поле, извне не меняется
         try:
             return db.update_settings(self.conn, patch)
         except ValueError as e:
@@ -504,7 +530,7 @@ class App(object):
     def h_task_patch(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
+        self._live_task_or_404(task_id)
         title = _clean_title(body['title']) if body.get('title') is not None else None
         note = _clean_note(body['note']) if body.get('note') is not None else None
         task = db.edit_task(self.conn, task_id, title=title, note=note, now=_now_for(req.day))
@@ -512,14 +538,14 @@ class App(object):
 
     def h_task_delete(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
+        self._live_task_or_404(task_id)
         task = db.delete_task(self.conn, task_id, _now_for(req.day))
         return {'task': enrich(task, req.day)}
 
     def h_task_evaluate(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
+        self._live_task_or_404(task_id)
         evaluation = self._evaluate(body.get('answers'), req.day, self._settings())
         task = db.apply_evaluation(self.conn, task_id, evaluation['answers'], evaluation, _now_for(req.day))
         return {'task': enrich(task, req.day), 'hints': evaluation['hints']}
@@ -530,20 +556,22 @@ class App(object):
         if not isinstance(group, str) or group.strip() not in engine.GROUPS:
             raise _validation('group', 'неизвестная группа')
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
+        self._live_task_or_404(task_id)
         task = db.move_task(self.conn, task_id, group.strip(), _now_for(req.day))
         return {'task': enrich(task, req.day)}
 
     def h_task_done(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
-        task = db.set_done(self.conn, task_id, _now_for(req.day))
+        task = self._live_task_or_404(task_id)
+        if task.get('status') != 'done':  # повторный клик — идемпотентно, без второй записи в журнал
+            task = db.set_done(self.conn, task_id, _now_for(req.day))
         return {'task': enrich(task, req.day)}
 
     def h_task_reopen(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
-        task = db.reopen_task(self.conn, task_id, _now_for(req.day))
+        task = self._live_task_or_404(task_id)
+        if task.get('status') != 'open':
+            task = db.reopen_task(self.conn, task_id, _now_for(req.day))
         return {'task': enrich(task, req.day)}
 
     def h_today_get(self, req: Request, m: Any) -> Dict[str, Any]:
@@ -567,7 +595,7 @@ class App(object):
     def h_today_add(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
         task_id = _as_task_id(body.get('task_id'), 'task_id')
-        task = self._task_or_404(task_id)
+        task = self._live_task_or_404(task_id)
         if task.get('status') != 'open':
             raise ApiError(400, 'not_open', 'в «Сегодня» можно добавить только открытую задачу')
         if task.get('group') != 'now':
@@ -595,7 +623,7 @@ class App(object):
 
     def h_today_remove(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
-        self._task_or_404(task_id)
+        self._live_task_or_404(task_id)
         db.remove_today(self.conn, task_id, _now_for(req.day))
         return self._today_payload(req.day, self._settings())
 
@@ -628,6 +656,16 @@ class App(object):
         day = req.day
         if body.get('today') is not None:
             day = _parse_day(body.get('today'), 'today')
+        if day > req.day and not os.environ.get('FOKUS_TODAY', '').strip():
+            # вне тестового режима перенос «в будущее» заморозил бы ежедневный авто-перенос до этой даты
+            raise _validation('today', 'дата в будущем допустима только в тестовом режиме (FOKUS_TODAY)')
+        last = db.get_settings(self.conn).get('last_rollover')
+        if isinstance(last, str) and last.strip():
+            try:
+                if day < date.fromisoformat(last.strip()):
+                    raise _validation('today', 'перенос назад во времени запрещён (last_rollover=%s)' % last)
+            except ValueError:
+                pass
         return self.run_rollover(day)
 
 
@@ -763,10 +801,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     db_path = os.path.abspath(db_path)
     backups_dir = os.path.join(os.path.dirname(db_path), 'backups')
 
-    backup_path = db.backup(db_path, backups_dir, keep=10)  # до открытия соединения
-    _log_line('бэкап: %s' % (backup_path or 'нет (БД ещё не создана)'))
+    try:
+        backup_path = db.backup(db_path, backups_dir, keep=10)  # до открытия соединения
+        _log_line('бэкап: %s' % (backup_path or 'нет (БД ещё не создана)'))
+    except Exception as e:  # бэкап не должен мешать работе: предупредить и продолжить
+        backup_path = None
+        _log_line('ВНИМАНИЕ: бэкап не удался (%s: %s) — продолжаю без бэкапа' % (type(e).__name__, e))
 
-    conn = db.connect(db_path)
+    try:
+        conn = db.connect(db_path)
+    except (sqlite3.Error, OSError) as e:
+        _log_line('ОШИБКА: база %s недоступна: %s. Проверьте права на папку data/ и свободное место.' % (db_path, e))
+        return 1
     app = make_app(conn, today, db_path=db_path, port=port)
     try:
         server = make_server(app, HOST, port)

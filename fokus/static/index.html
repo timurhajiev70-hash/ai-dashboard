@@ -125,7 +125,7 @@ h3 { font-size: 20px; margin: 18px 0 10px; }
 .wizard { max-width: 720px; }
 .wizard .q { font-size: 28px; font-weight: 700; margin: 10px 0 18px; line-height: 1.25; }
 .opts { display: grid; gap: 10px; }
-.opt { text-align: left; font-size: 20px; padding: 16px 18px; border-radius: 14px; background: var(--surface); border: 2px solid var(--border); }
+.opt { text-align: left; font-size: 20px; padding: 16px 18px; border-radius: 14px; background: var(--surface); border: 2px solid var(--border); word-break: break-word; }
 .opt:hover { border-color: #3a4150; }
 .opt.sel { border-color: var(--accent); background: var(--surface-2); }
 .step { color: var(--muted); font-size: 15px; letter-spacing: .5px; text-transform: uppercase; }
@@ -143,8 +143,9 @@ input.wide, textarea.wide { width: 100%; font-size: 20px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .field label { display: block; color: var(--muted); font-size: 15px; margin-bottom: 4px; }
 .field input, .field select { width: 100%; }
-table.journal { width: 100%; border-collapse: collapse; font-size: 15px; }
-table.journal th, table.journal td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.journal { width: 100%; border-collapse: collapse; font-size: 15px; table-layout: fixed; }
+table.journal th, table.journal td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-word; }
+table.journal th:first-child, table.journal td:first-child { width: 18%; }
 table.journal th { color: var(--muted); font-weight: 600; }
 
 /* --- Модалка, тост -------------------------------------------------- */
@@ -201,7 +202,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
   function t(key, vars) {
     let s = state.L[key];
     if (s === undefined) s = key;
-    if (vars) for (const k in vars) s = s.split('{' + k + '}').join(String(vars[k]));
+    if (vars) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
     return s;
   }
   function el(tag, attrs) {
@@ -249,6 +250,14 @@ table.journal th { color: var(--muted); font-weight: 600; }
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => node.remove(), 3500);
   }
+  let busy = false;  // защита от двойного клика: пока идёт запрос, повторные действия игнорируются
+  async function guarded(fn) {
+    if (busy) return undefined;
+    busy = true;
+    try { return await fn(); } finally { busy = false; }
+  }
+  function isTodayNow(task) { return !!task.is_today && task.today_date === state.serverToday; }
+
   function showError(err) {
     const d = (err && err.data) || {};
     let msg = d.message || d.error || String(err);
@@ -265,7 +274,10 @@ table.journal th { color: var(--muted); font-weight: 600; }
     });
     box.appendChild(bar);
     document.body.appendChild(overlay);
-    function close() { overlay.remove(); }
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } };
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => { const f = box.querySelector('input, textarea, button'); if (f) f.focus(); }, 0);
+    function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
     return close;
   }
 
@@ -290,7 +302,9 @@ table.journal th { color: var(--muted); font-weight: 600; }
     opts = opts || {};
     const out = [];
     if (opts.group) out.push(el('span', { class: 'badge grp' }, el('span', { class: 'dot ' + task.group }), t('group_' + task.group)));
-    if (task.is_today && !opts.noToday) out.push(el('span', { class: 'badge ok', text: t('today_badge') }));
+    if (isTodayNow(task) && !opts.noToday) out.push(el('span', { class: 'badge ok', text: t('today_badge') }));
+    if (task.status === 'open' && task.group !== 'now' && task.days_left !== null && task.days_left !== undefined && task.days_left <= 0)
+      out.push(el('span', { class: 'badge alert', text: dueLabel(task) }));
     if (task.status === 'done') out.push(el('span', { class: 'badge ok', text: t('done_badge') }));
     if (task.group_manual) out.push(el('span', { class: 'badge', text: t('manual_badge') }));
     if (task.carry_count > 0) out.push(el('span', { class: 'badge warn', text: t('carried_badge', { n: task.carry_count }) }));
@@ -300,13 +314,35 @@ table.journal th { color: var(--muted); font-weight: 600; }
   }
 
   // ------------------------------------------------------------ действия над задачей
-  async function markDone(task) {
-    try { await api('POST', '/api/tasks/' + task.id + (task.status === 'done' ? '/reopen' : '/done')); await refreshCurrent(); }
-    catch (e) { showError(e); }
+  function markDone(task) {
+    return guarded(async () => {
+      try {
+        const reopen = task.status === 'done';
+        await api('POST', '/api/tasks/' + task.id + (reopen ? '/reopen' : '/done'));
+        toast(t(reopen ? 'reopen_toast' : 'done_toast', { title: task.title }), 'ok');
+        await refreshCurrent();
+      } catch (e) { showError(e); }
+    });
   }
-  async function deleteTask(task) {
+  function deleteTask(task) {
     if (!window.confirm(t('confirm_delete', { title: task.title }))) return;
-    try { await api('DELETE', '/api/tasks/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+    return guarded(async () => {
+      try { await api('DELETE', '/api/tasks/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+    });
+  }
+  function editTask(task) {
+    const title = el('input', { class: 'wide', type: 'text', maxlength: '200', value: task.title });
+    const note = el('textarea', { class: 'wide', rows: '2' }); note.value = task.note || '';
+    const body = el('div', {}, el('label', { class: 'f', text: t('add_name_label') }), title, el('label', { class: 'f', text: t('add_note_label') }), note);
+    modal(t('edit_title'), body, [
+      { label: t('btn_cancel') },
+      { label: t('btn_save'), cls: 'primary', onclick: () => guarded(async () => {
+        const newTitle = title.value.trim();
+        if (!newTitle) { toast(t('add_name_required'), 'err'); return; }
+        try { await api('PATCH', '/api/tasks/' + task.id, { title: newTitle, note: note.value.trim() }); await refreshCurrent(); }
+        catch (e) { showError(e); }
+      }) }
+    ]);
   }
   function moveTask(task) {
     const body = el('div', { class: 'opts' });
@@ -322,22 +358,24 @@ table.journal th { color: var(--muted); font-weight: 600; }
     });
     close = modal(t('move_title', { title: task.title }), body, [{ label: t('btn_cancel') }]);
   }
-  async function addToToday(task, replaceId) {
-    const body = { task_id: task.id };
-    if (replaceId) body.replace_id = replaceId;
-    try {
-      await api('POST', '/api/today', body);
-      await refreshCurrent();
-      return true;
-    } catch (e) {
-      if (e.status === 409 && e.data && e.data.error === 'day_full') { offerReplace(task, e.data); return false; }
-      showError(e); return false;
-    }
+  function addToToday(task, replaceId) {
+    return guarded(async () => {
+      const body = { task_id: task.id };
+      if (replaceId) body.replace_id = replaceId;
+      try {
+        await api('POST', '/api/today', body);
+        await refreshCurrent();
+        return true;
+      } catch (e) {
+        if (e.status === 409 && e.data && e.data.error === 'day_full') { offerReplace(task, e.data); return false; }
+        showError(e); return false;
+      }
+    });
   }
   function offerReplace(task, info) {
     const open = (info.tasks || []).filter((x) => x.status === 'open');
-    if (!open.length) { toast(t('today_all_done'), 'ok'); return; }
-    const body = el('div', {}, el('p', { class: 'muted', text: t('today_full_text') }), el('p', { text: t('today_replace_with', { title: task.title }) }));
+    if (!open.length) { toast(t('today_limit_done', { limit: info.limit }), 'ok'); return; }
+    const body = el('div', {}, el('p', { class: 'muted', text: t('today_full_text', { limit: info.limit }) }), el('p', { text: t('today_replace_with', { title: task.title }) }));
     const list = el('div', { class: 'opts' });
     let close;
     open.forEach((x) => {
@@ -347,8 +385,10 @@ table.journal th { color: var(--muted); font-weight: 600; }
     body.appendChild(list);
     close = modal(t('today_full_title', { limit: info.limit }), body, [{ label: t('btn_cancel') }]);
   }
-  async function removeFromToday(task) {
-    try { await api('DELETE', '/api/today/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+  function removeFromToday(task) {
+    return guarded(async () => {
+      try { await api('DELETE', '/api/today/' + task.id); await refreshCurrent(); } catch (e) { showError(e); }
+    });
   }
 
   function taskRow(task, opts) {
@@ -358,9 +398,10 @@ table.journal th { color: var(--muted); font-weight: 600; }
       el('span', { text: durLabel(task.duration) }), el('span', { text: whoLabel(task) }), badges(task, opts));
     const actions = el('div', { class: 'a' });
     if (task.status === 'open') {
-      if (task.group === 'now' && !task.is_today && opts.allowToday !== false)
+      if (task.group === 'now' && !isTodayNow(task) && opts.allowToday !== false)
         actions.appendChild(el('button', { class: 'btn small primary', text: t('btn_to_today'), onclick: () => addToToday(task) }));
-      if (task.is_today) actions.appendChild(el('button', { class: 'btn small ghost', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }));
+      if (isTodayNow(task)) actions.appendChild(el('button', { class: 'btn small ghost', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }));
+      actions.appendChild(el('button', { class: 'btn small ghost', text: '✎', title: t('btn_edit'), onclick: () => editTask(task) }));
       actions.appendChild(el('button', { class: 'btn small', text: '✓ ' + t('btn_done'), onclick: () => markDone(task) }));
       actions.appendChild(el('button', { class: 'btn small', text: '⇄ ' + t('btn_move'), onclick: () => moveTask(task) }));
       actions.appendChild(el('button', { class: 'btn small ' + (task.needs_review ? 'primary' : ''), text: '↻ ' + t('btn_reeval'), onclick: () => startWizard('reeval', task) }));
@@ -376,7 +417,10 @@ table.journal th { color: var(--muted); font-weight: 600; }
   function renderTabs() {
     const nav = clear($('#tabs'));
     SCREENS.forEach((s) => {
-      const b = el('button', { class: s === state.screen ? 'active' : '', onclick: () => show(s) }, t('nav_' + s));
+      const b = el('button', { class: s === state.screen ? 'active' : '', onclick: () => {
+        if (s === 'add' && state.wiz && state.wiz.mode === 'reeval') state.wiz = null;  // «Добавить» = новая задача
+        show(s);
+      } }, t('nav_' + s));
       if (s === 'board' && state.counts) {
         const total = GROUPS.reduce((a, g) => a + (state.counts[g] || 0), 0);
         b.appendChild(el('span', { class: 'cnt', text: String(total) }));
@@ -416,6 +460,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
     if (!d.tasks.length) {
       root.appendChild(el('div', { class: 'empty', text: t('today_empty', { limit: d.limit }) }));
     }
+    if (d.tasks.length > d.limit) root.appendChild(el('p', { class: 'badge alert', style: 'font-size:15px;padding:6px 12px;margin:0 0 12px', text: t('today_over_limit', { limit: d.limit }) }));
     d.tasks.forEach((task, i) => {
       const meta = el('div', { class: 'meta' },
         el('span', { class: 'score', text: fmtScore(task.score) }), el('span', { text: dueLabel(task) }),
@@ -427,7 +472,9 @@ table.journal th { color: var(--muted); font-weight: 600; }
         el('div', { class: 'num', text: String(i + 1) }),
         el('div', {}, el('div', { class: 'title', text: task.title }), task.note ? el('div', { class: 'note muted', text: task.note }) : null, meta,
           task.needs_review ? el('div', { class: 'row', style: 'margin-top:10px' },
-            el('span', { class: 'muted', text: t('today_review_hint', { n: task.carry_count }) }),
+            el('span', { class: 'muted', text: task.review_reason === 'stale'
+              ? t('today_stale_hint', { date: String(task.evaluated_at || '').slice(0, 10) })
+              : t('today_review_hint', { n: task.carry_count }) }),
             el('button', { class: 'btn small primary', text: t('btn_reeval'), onclick: () => startWizard('reeval', task) })) : null),
         actions);
       root.appendChild(card);
@@ -445,7 +492,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
       list.appendChild(el('h3', { text: t('today_candidates_title') }));
       d.candidates.forEach((c) => list.appendChild(taskRow(c, {})));
     } else if (d.free_slots === 0 && pool.length) {
-      list.appendChild(el('h3', { text: t('today_pool_title') }));
+      list.appendChild(el('h3', { text: t('today_pool_title', { limit: d.limit }) }));
       pool.forEach((c) => list.appendChild(taskRow(c, {})));
     } else if (d.free_slots === 0) {
       list.appendChild(el('div', { class: 'empty', text: t('today_pool_empty') }));
@@ -469,7 +516,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
 
   function startWizard(mode, task) {
     state.wiz = {
-      mode: mode, task: task || null, step: 0,
+      mode: mode, task: task || null, step: 0, returnTo: state.screen,
       title: task ? task.title : '', note: task ? task.note : '',
       answers: task ? {
         importance: task.importance, due: task.due, consequence: task.consequence, who: task.who,
@@ -530,8 +577,8 @@ table.journal th { color: var(--muted); font-weight: 600; }
       box.appendChild(opts);
       if (extra) box.appendChild(extra);
       box.appendChild(el('div', { class: 'row', style: 'margin-top:18px' },
-        el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), onclick: () => { if (w.step === 1 && w.mode === 'reeval') { state.wiz = null; show('board'); return; } w.step--; renderAdd(); } }),
-        el('button', { class: 'btn ghost', text: t('btn_cancel'), onclick: () => { state.wiz = null; show(w.mode === 'reeval' ? 'board' : 'today'); } })));
+        el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), onclick: () => { if (w.step === 1 && w.mode === 'reeval') { state.wiz = null; show(w.returnTo || 'board'); return; } w.step--; renderAdd(); } }),
+        el('button', { class: 'btn ghost', text: t('btn_cancel'), onclick: () => { state.wiz = null; show(w.mode === 'reeval' ? (w.returnTo || 'board') : 'today'); } })));
       return;
     }
 
@@ -575,14 +622,17 @@ table.journal th { color: var(--muted); font-weight: 600; }
       el('button', { class: 'btn primary', text: t('btn_save'), onclick: saveWizard })));
   }
 
-  async function saveWizard() {
+  function saveWizard() { return guarded(saveWizardInner); }
+  async function saveWizardInner() {
     const w = state.wiz;
+    if (!w) return;
     const answers = wizardAnswers();
     try {
       if (w.mode === 'reeval') {
         const r = await api('POST', '/api/tasks/' + w.task.id + '/evaluate', { answers: answers });
         toast(t('summary_reeval_saved', { group: groupLabel(r.task.group), score: fmtScore(r.task.score) }), 'ok');
-        state.wiz = null; show('board');
+        const back = w.returnTo || 'board';
+        state.wiz = null; show(back);
         return;
       }
       const r = await api('POST', '/api/tasks', { title: w.title, note: w.note, answers: answers });
@@ -617,7 +667,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
       d.review.forEach((task) => {
         const reason = task.review_reason === 'carried' ? t('review_reason_carried', { n: task.carry_count }) : t('review_reason_stale', { date: String(task.evaluated_at || '').slice(0, 10) });
         rv.appendChild(el('div', { class: 'row spread', style: 'padding:8px 0;border-top:1px solid var(--border)' },
-          el('div', {}, el('div', { style: 'font-weight:600' }, el('span', { class: 'dot ' + task.group }), task.title), el('div', { class: 'muted', style: 'font-size:15px', text: reason })),
+          el('div', { style: 'min-width:0' }, el('div', { style: 'font-weight:600;word-break:break-word' }, el('span', { class: 'dot ' + task.group }), task.title), el('div', { class: 'muted', style: 'font-size:15px', text: reason })),
           el('button', { class: 'btn small primary', text: '↻ ' + t('btn_reeval'), onclick: () => startWizard('reeval', task) })));
       });
       root.appendChild(rv);
@@ -686,7 +736,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
       num('day_limit', 'settings_day_limit', '1', '1', '10'), num('stale_days', 'settings_stale_days', '1', '1', '90'), num('carry_limit', 'settings_carry_limit', '1', '1', '10'),
       el('div', { class: 'field' }, el('label', { text: t('settings_language') }), langSel)));
     root.appendChild(el('div', { class: 'row', style: 'margin-top:16px' },
-      el('button', { class: 'btn primary', text: t('btn_save'), onclick: async () => {
+      el('button', { class: 'btn primary', text: t('btn_save'), onclick: () => guarded(async () => {
         const patch = { weights: {}, thresholds: {} };
         for (const path in inputs) {
           const v = parseFloat(inputs[path].value);
@@ -700,7 +750,7 @@ table.journal th { color: var(--muted); font-weight: 600; }
           if (saved.language !== state.lang) await loadLang(saved.language);
           renderTabs(); await renderSettings();
         } catch (e) { showError(e); }
-      } })));
+      }) })));
     root.appendChild(el('p', { class: 'muted', style: 'margin-top:20px;font-size:14px', text: t('settings_about') }));
 
     // журнал
@@ -725,14 +775,27 @@ table.journal th { color: var(--muted); font-weight: 600; }
     $('#app-title').textContent = t('app_title');
     document.title = t('app_title');
   }
+  async function checkNewDay() {
+    let h;
+    try { h = await api('GET', '/api/health'); } catch (e) { return; }
+    if (!h || !h.today) return;
+    const changed = state.serverToday && h.today !== state.serverToday;
+    state.serverToday = h.today;
+    $('#app-date').textContent = h.today;
+    if (changed) { toast(t('new_day'), 'ok'); await refreshCurrent(); }
+  }
   async function init() {
     try {
       const s = await api('GET', '/api/settings');
       state.settings = s;
       await loadLang(s.language || 'ru');
+      await checkNewDay();
     } catch (e) { showError(e); }
     renderTabs();
     show('today');
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkNewDay(); });
+    window.addEventListener('focus', () => { checkNewDay(); });
+    setInterval(checkNewDay, 60000);
   }
   init();
 })();

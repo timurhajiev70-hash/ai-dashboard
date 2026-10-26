@@ -99,7 +99,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- value = J
 | `evaluate` | старая группа/балл `"now/72.5"` → новая | повторное прохождение мастера |
 | `group_change` | группа → группа | авто-смена группы при пересчёте (rollover), note = `auto` |
 | `manual_move` | группа → группа | пользователь перенёс вручную |
-| `today_add` / `today_remove` | '' → дата | добавлена/убрана из «Сегодня» (note=`replace` при замене) |
+| `today_add` / `today_remove` | '' → дата | добавлена/убрана из «Сегодня» (note: `replace` — замена, `moved` — ручной перенос из 🔴, `evaluated` — переоценка понизила группу, `day_end` — выполненная задача прошедшего дня снята с дня при rollover) |
 | `carry` | N → N+1 | не выполнена к концу дня, перенесена |
 | `review_required` | '' → `carried` / `stale` | система требует пройти вопросы заново |
 | `done` / `reopen` | status → status | |
@@ -118,7 +118,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- value = J
   "last_rollover": null
 }
 ```
-Валидация при PUT: веса ≥ 0 и сумма > 0 (нормализуются движком); `thresholds.now > priority > queue > 0`; `day_limit` 1..10; `stale_days` 1..90; `carry_limit` 1..10; `language` ∈ {ru, de}. Иначе 400.
+Валидация при PUT: веса 0..1000 и сумма > 0 (нормализуются движком); `100 ≥ thresholds.now > priority > queue > 0`; `day_limit` 1..10; `stale_days` 1..90; `carry_limit` 1..10; `language` ∈ {ru, de}. Иначе 400. `last_rollover` — служебное поле: через API не меняется (игнорируется в PUT).
 
 ## 5. Движок приоритета (engine.py, чистые функции, без БД)
 
@@ -205,7 +205,9 @@ plan_rollover(tasks: list, today: date, settings: dict) -> dict
     # {'carry': [task_id...],           # is_today=1 и today_date < today → перенос, carry_count+1
     #  'review': {task_id: reason},     # carry_count+1 ≥ carry_limit → 'carried'; (today − evaluated_at) ≥ stale_days → 'stale'
     #  'regroup': {task_id: (old, new)}, # пересчёт по датам, только для group_manual == 0 и group ∉ {delegate, waiting}
-    #  'rescore': {task_id: new_score}}  # новые баллы для всех открытых задач
+    #  'rescore': {task_id: new_score},  # новые баллы для всех открытых задач
+    #  'clear': [task_id...]}            # выполненные (status=done) задачи с is_today=1 и today_date < today → снять с дня без переноса
+    # на вход подаются открытые И выполненные задачи (list_tasks(status='all'))
 ```
 Правила переноса (детали): задача, выбранная на день и не сделанная к следующему дню → `is_today=0`, `today_date=NULL`, `carry_count += 1`, журнал `carry`. Если `carry_count ≥ carry_limit` → `needs_review=1, review_reason='carried'`. Любая открытая задача, у которой `(today − date(evaluated_at)) ≥ stale_days` (ровно 7 дней — уже stale) → `needs_review=1, review_reason='stale'` (если `needs_review` ещё не стоит). Если в один rollover задача и перенесена в 3-й раз, и залежалась — причина `carried` (проверяется первой). `needs_review` сбрасывается только повторным прохождением мастера (evaluate). Повторное прохождение мастера сбрасывает `carry_count=0`, `group_manual=0`, обновляет `evaluated_at`, `group_since` (если группа сменилась).
 
@@ -249,8 +251,8 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | PATCH | `/api/tasks/{id}` | `{title?, note?}` | `{task}` |
 | POST | `/api/tasks/{id}/evaluate` | `{answers}` | `{task, hints}` — повторный мастер |
 | POST | `/api/tasks/{id}/move` | `{group}` | `{task}`; 400 при неизвестной группе |
-| POST | `/api/tasks/{id}/done` | | `{task}` |
-| POST | `/api/tasks/{id}/reopen` | | `{task}` |
+| POST | `/api/tasks/{id}/done` | | `{task}`; повторный вызов для уже сделанной — идемпотентно (без записи в журнал) |
+| POST | `/api/tasks/{id}/reopen` | | `{task}`; идемпотентно для открытой |
 | DELETE | `/api/tasks/{id}` | | `{task}` (status=deleted) |
 | GET | `/api/today` | | `{date, limit, tasks:[Task], candidates:[Task], pool:[Task], free_slots:int}` — `candidates` = предложение на свободные места (пусто при полном дне), `pool` = все открытые задачи 🔴 вне дня (для замены при полном дне) |
 | POST | `/api/today` | `{task_id, replace_id?}` | 200 `{tasks, free_slots}`; 409 `{error:"day_full", limit, tasks}` если мест нет и нет replace_id; 400 `{error:"not_now_group"}` если задача не в группе `now`; 400 `{error:"not_open"}` |
@@ -258,7 +260,7 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | GET | `/api/board` | `?sort=score|due|created` | `{groups:{now:{count, tasks:[...]}, priority:{...}, queue, delegate, someday, waiting}, review:[Task]}` |
 | GET | `/api/review` | | `{tasks:[Task]}` — needs_review=1 |
 | GET | `/api/journal` | `?task_id=&limit=` | `{entries:[...]}` — каждая запись + `title` задачи (JOIN) |
-| POST | `/api/rollover` | `{today?: "YYYY-MM-DD"}` | `{carried, review, regrouped, rescored, today}` |
+| POST | `/api/rollover` | `{today?: "YYYY-MM-DD"}` | `{carried, review, regrouped, rescored, cleared, today}`. 400, если `today` раньше `last_rollover` (назад во времени нельзя) или `today` в будущем без тестового режима `FOKUS_TODAY` |
 
 Объект `Task` = строка таблицы как dict (`grp`→`group`), плюс `days_left` (int|null) и `hints` (list).
 
@@ -268,6 +270,9 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 - Тело запроса — JSON ≤ 64 КБ, иначе 413; невалидный JSON → 400 `{error:"bad_json"}`.
 - `title` после trim: 1..200 символов, иначе 400 `{error:"validation", field:"title"}`.
 - Неизвестный путь `/api/...` → 404 `{error:"not_found"}`. Статика только `/` и `/index.html`.
+- Изменяющие операции (PATCH, DELETE, evaluate, move, done, reopen, today) над удалённой задачей → 404; `GET /api/tasks/{id}` удалённую отдаёт (status=deleted).
+- JSON-константы `Infinity`/`NaN` → 400 `bad_json`; id вне 1..2^63−1 → 400/404; `title` из одних невидимых символов (zero-width) → 400.
+- Бэкап при старте не блокирует запуск: при ошибке — предупреждение в stderr, сервер работает; недоступная БД → понятное сообщение и код 1.
 - Сервер слушает только 127.0.0.1. Запрос с заголовком `Origin`, не равным `http://127.0.0.1:PORT`/`http://localhost:PORT`, → 403 (защита от чужих сайтов).
 - Запуск: `python3 server.py` → бэкап БД → сервер (`ThreadingHTTPServer`), один глобальный `threading.Lock` на операции с БД.
 - Переменные: `FOKUS_PORT` (4321), `FOKUS_DB` (путь к БД, по умолчанию `data/fokus.db` рядом со скриптом), `FOKUS_TODAY`.
@@ -299,6 +304,11 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | 11 | Модифицирующие функции db бросают `db.NotFound` (KeyError) для несуществующей задачи; `get_task` → None | сервер превращает в 404 |
 | 12 | `get_task` удалённой задачи возвращает dict со `status='deleted'`; `list_tasks` её не показывает ни при каком `status` | мягкое удаление |
 | 13 | `update_settings` атомарна: невалидный patch не применяется даже частично | предсказуемость |
+| 14 | Выполненная задача дня после смены дня снимается с дня (`today_remove`, note `day_end`) без переноса и без счётчика | иначе reopen назавтра оставлял задачу в «подвешенном» состоянии, а rollover считал ложный перенос |
+| 15 | UI: один запрос за раз (повторный клик игнорируется, пока идёт предыдущий); сервер: done/reopen идемпотентны | двойной клик не создаёт дублей |
+| 16 | UI раз в минуту и при возврате на вкладку проверяет дату сервера; при смене дня — уведомление и перерисовка | вкладка, оставленная с вечера |
+| 17 | Название и заметку можно изменить кнопкой ✎ (PATCH, журнал `edit`) | опечатка в номере tomedo не требует пересоздания |
+| 18 | Два сервера на одной БД (разные порты) не поддерживаются: лаунчер защищает от второго запуска на том же порту | известное ограничение v1 |
 
 ## 10. Открытые вопросы к владельцу (не блокируют v1, приняты допущения из §9)
 1. «На этой неделе» — в течение 7 дней (принято) или до воскресенья?
