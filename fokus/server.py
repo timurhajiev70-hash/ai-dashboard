@@ -471,7 +471,7 @@ class App(object):
     # ------------------------------------------------------------------ обработчики
 
     def h_health(self, req: Request, m: Any) -> Dict[str, Any]:
-        return {'ok': True, 'version': VERSION, 'today': req.day.isoformat(), 'db': self.db_path}
+        return {'ok': True, 'version': VERSION, 'today': req.day.isoformat(), 'db': self.db_path, 'pid': os.getpid()}
 
     def h_i18n_strings(self, req: Request, m: Any) -> Dict[str, Any]:
         lang = req.param('lang')

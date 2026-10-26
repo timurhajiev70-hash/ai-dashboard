@@ -42,7 +42,8 @@ class McpSession(object):
         self.next_id = 1
 
     def send(self, message):
-        self.proc.stdin.write((json.dumps(message, ensure_ascii=False) + '\n').encode('utf-8'))
+        # ensure_ascii=True: суррогаты (\ud800) уходят в escape-форме — так их шлёт и реальный клиент
+        self.proc.stdin.write((json.dumps(message, ensure_ascii=True) + '\n').encode('utf-8'))
         self.proc.stdin.flush()
 
     def read(self):
@@ -96,16 +97,11 @@ class TestMcpProtocol(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.s.close()
-        # остановить автозапущенный сервер Fokus
+        # остановить ТОЛЬКО автозапущенный для теста сервер — по pid из /api/health на тестовом порту
         try:
-            urllib.request.urlopen('http://127.0.0.1:%d/api/health' % cls.port, timeout=1)
-            out = subprocess.run(['pgrep', '-f', '^%s %s' % (sys.executable, os.path.join(FOKUS, 'server.py'))],
-                                 stdout=subprocess.PIPE).stdout.decode().split()
-            for pid in out:
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except OSError:
-                    pass
+            with urllib.request.urlopen('http://127.0.0.1:%d/api/health' % cls.port, timeout=1) as resp:
+                health = json.loads(resp.read().decode('utf-8'))
+            os.kill(int(health['pid']), signal.SIGTERM)
         except Exception:
             pass
         time.sleep(0.5)
@@ -155,6 +151,51 @@ class TestMcpProtocol(unittest.TestCase):
         self.s.proc.stdin.flush()
         resp = self.s.read()
         self.assertEqual(resp['error']['code'], -32700)
+
+    def test_07_hostile_input_does_not_kill_server(self):
+        # одиночный суррогат в id / name (валидный JSON-escape) — ответ в escape-форме, сервер жив
+        self.s.send({'jsonrpc': '2.0', 'id': '\ud800', 'method': 'ping'})
+        resp = self.s.read()
+        self.assertEqual(resp['id'], '\ud800')
+        self.s.send({'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call', 'params': {'name': '\ud800', 'arguments': {}}})
+        self.assertEqual(self.s.read()['error']['code'], -32602)
+        # глубоко вложенный JSON → Parse error, не падение
+        self.s.proc.stdin.write(('[' * 100000 + ']' * 100000 + '\n').encode('utf-8'))
+        self.s.proc.stdin.flush()
+        self.assertEqual(self.s.read()['error']['code'], -32700)
+        # params не объект → Invalid params; запрос без method → Invalid Request; пустой батч
+        self.s.send({'jsonrpc': '2.0', 'id': 8, 'method': 'tools/call', 'params': [1, 2]})
+        self.assertEqual(self.s.read()['error']['code'], -32602)
+        self.s.send({'jsonrpc': '2.0', 'id': 9})
+        self.assertEqual(self.s.read()['error']['code'], -32600)
+        self.s.send({'jsonrpc': '2.0', 'id': 10, 'method': 42})
+        self.assertEqual(self.s.read()['error']['code'], -32600)
+        self.s.proc.stdin.write(b'[]\n'); self.s.proc.stdin.flush()
+        self.assertEqual(self.s.read()['error']['code'], -32600)
+        # ответ клиента (result без method) игнорируется, сервер жив
+        self.s.send({'jsonrpc': '2.0', 'id': 11, 'result': {}})
+        self.assertEqual(self.s.request('ping')['result'], {})
+
+    def test_08_tool_argument_validation(self):
+        for args in ({'task_id': float('inf')}, {'task_id': 1.5}, {'task_id': 0}, {'task_id': True}):
+            r = self.s.call('fokus_done', args)
+            self.assertTrue(r['isError'], args)
+            self.assertIn('Неверные параметры', r['content'][0]['text'])
+        r = self.s.call('fokus_journal', {'limit': [1]})
+        self.assertTrue(r['isError'])
+        r = self.s.call('fokus_list_tasks', {'group': 'now&status=all'})
+        self.assertTrue(r['isError'])
+        self.assertIn('group', r['content'][0]['text'])
+        r = self.s.call('fokus_board', {'sort': 'a b'})
+        self.assertTrue(r['isError'])
+
+    def test_09_annotations(self):
+        tools = self.s.request('tools/list')['result']['tools']
+        by = dict((t['name'], t) for t in tools)
+        self.assertTrue(by['fokus_today']['annotations']['readOnlyHint'])
+        self.assertTrue(by['fokus_delete']['annotations']['destructiveHint'])
+        self.assertFalse(by['fokus_add_task']['annotations']['readOnlyHint'])
+        self.assertIn('tomedo', by['fokus_edit']['description'])
 
     # --- инструменты (сценарий; порядок важен)
     def test_10_preview(self):
@@ -226,8 +267,12 @@ class TestMcpProtocol(unittest.TestCase):
         self.assertEqual(sorted(board['groups'].keys()), sorted(mcp_server.GROUP_ENUM))
         self.assertIn('Переоценка никому не нужна', self.s.call('fokus_review')['content'][0]['text'])
         self.assertEqual(self.s.call('fokus_settings')['structuredContent']['day_limit'], 3)
+        r = self.s.call('fokus_edit', {'task_id': tid})
+        self.assertTrue(r['isError'])
         d = self.s.call('fokus_delete', {'task_id': tid})
         self.assertEqual(d['structuredContent']['task']['status'], 'deleted')
+        g = self.s.call('fokus_get_task', {'task_id': tid})
+        self.assertIn('удалена', g['content'][0]['text'])
 
     def test_14_validation_error_from_api(self):
         r = self.s.call('fokus_add_task', {'title': '', 'answers': ANS_NOW})
@@ -274,6 +319,19 @@ class TestInstall(unittest.TestCase):
             self.assertEqual(set(cfg['mcpServers']), {'other', 'fokus'})
             self.assertEqual(cfg['theme'], 'dark')
             self.assertTrue(os.path.isfile(path + '.bak'))
+            mcp_server.install(path)   # повторная установка не затирает первую копию
+            self.assertTrue(os.path.isfile(path + '.bak'))
+            self.assertTrue(any(n.startswith('claude_desktop_config.json.bak-') for n in os.listdir(os.path.dirname(path))))
+            with open(path, 'w', encoding='utf-8') as f:            # битый JSON → ValueError, не трейсбек
+                f.write('{broken')
+            with self.assertRaises(ValueError):
+                mcp_server.install(path)
+            import io, contextlib
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(mcp_server.main(['--install', '--path', path]), 1)
+            import io, contextlib
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(mcp_server.main(['--install', '--path']), 2)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

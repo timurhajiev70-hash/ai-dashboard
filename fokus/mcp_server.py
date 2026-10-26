@@ -19,11 +19,13 @@ FOKUS_MCP_AUTOSTART=0); вывод сервера — в data/server.log ряд�
 Прописать в Claude Desktop: python3 mcp_server.py --install   (делает копию старого конфига)
 """
 import json
+import math
 import os
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,9 +66,12 @@ class FokusClient(object):
         self.base = 'http://127.0.0.1:%d' % port
         self.autostart = autostart
         self.timeout = timeout
+        self.health_timeout = 2.0          # localhost отвечает мгновенно; «молчащий» чужой порт не должен держать 10 с
         self.child = None  # type: Optional[subprocess.Popen]
+        self.failed_until = 0.0            # после неудачного автозапуска не пытаться снова N секунд
+        self.log_path = ''
 
-    def raw(self, method: str, path: str, body: Optional[dict] = None) -> Tuple[int, Any]:
+    def raw(self, method: str, path: str, body: Optional[dict] = None, timeout: Optional[float] = None) -> Tuple[int, Any]:
         data = None
         headers = {'Accept': 'application/json'}
         if body is not None:
@@ -74,7 +79,7 @@ class FokusClient(object):
             headers['Content-Type'] = 'application/json'
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 return resp.status, json.loads(resp.read().decode('utf-8') or 'null')
         except urllib.error.HTTPError as e:
             try:
@@ -87,33 +92,51 @@ class FokusClient(object):
 
     def healthy(self) -> bool:
         try:
-            status, data = self.raw('GET', '/api/health')
+            status, data = self.raw('GET', '/api/health', timeout=self.health_timeout)
         except FokusUnavailable:
             return False
         return status == 200 and isinstance(data, dict) and data.get('ok') is True
+
+    def _last_log_line(self) -> str:
+        try:
+            with open(self.log_path, 'rb') as f:
+                lines = [ln for ln in f.read()[-4000:].decode('utf-8', 'replace').splitlines() if ln.strip()]
+            return lines[-1].strip() if lines else ''
+        except OSError:
+            return ''
 
     def ensure_running(self) -> None:
         if self.healthy():
             return
         if not self.autostart:
             raise FokusUnavailable('Fokus не запущен на %s. Запустите Fokus.command.' % self.base)
+        if time.time() < self.failed_until:
+            raise FokusUnavailable('Fokus не запускается на %s (повторная попытка через несколько секунд); лог: %s'
+                                   % (self.base, self.log_path or 'data/server.log'))
         server_py = os.path.join(HERE, 'server.py')
         if not os.path.isfile(server_py):
             raise FokusUnavailable('не найден %s' % server_py)
         log('Fokus не запущен — запускаю %s' % server_py)
         env = dict(os.environ)
         env['FOKUS_PORT'] = str(self.port)
-        # лог сервера — рядом с его БД (data/server.log; при FOKUS_DB — рядом с указанным файлом)
+        # путь к БД — как его поймёт server.py (относительный → от папки проекта); лог — рядом с БД
         db_path = env.get('FOKUS_DB', '').strip() or os.path.join(HERE, 'data', 'fokus.db')
+        if not os.path.isabs(db_path):
+            db_path = os.path.join(HERE, db_path)
+        env['FOKUS_DB'] = db_path
         log_dir = os.path.dirname(os.path.abspath(db_path))
         os.makedirs(log_dir, exist_ok=True)
-        logfile = open(os.path.join(log_dir, 'server.log'), 'ab')
-        # stdout сервера НЕ должен попасть в наш stdout (там только JSON-RPC)
-        self.child = subprocess.Popen(
-            [sys.executable, server_py], cwd=HERE, env=env,
-            stdin=subprocess.DEVNULL, stdout=logfile, stderr=logfile,
-            start_new_session=True,
-        )
+        self.log_path = os.path.join(log_dir, 'server.log')
+        logfile = open(self.log_path, 'ab')
+        try:
+            # stdout сервера НЕ должен попасть в наш stdout (там только JSON-RPC)
+            self.child = subprocess.Popen(
+                [sys.executable, server_py], cwd=HERE, env=env,
+                stdin=subprocess.DEVNULL, stdout=logfile, stderr=logfile,
+                start_new_session=True,
+            )
+        finally:
+            logfile.close()
         deadline = time.time() + 8.0
         while time.time() < deadline:
             if self.healthy():
@@ -122,7 +145,12 @@ class FokusClient(object):
             if self.child.poll() is not None:
                 break
             time.sleep(0.25)
-        raise FokusUnavailable('не удалось запустить Fokus (см. data/server.log)')
+        if self.healthy():  # сервер мог подняться другим клиентом (Claude Desktop + Claude Code одновременно)
+            return
+        self.failed_until = time.time() + 15.0
+        reason = self._last_log_line()
+        raise FokusUnavailable('не удалось запустить Fokus на %s%s. Лог: %s'
+                               % (self.base, (' — ' + reason) if reason else '', self.log_path))
 
     def call(self, method: str, path: str, body: Optional[dict] = None) -> Tuple[int, Any]:
         self.ensure_running()
@@ -170,6 +198,8 @@ def _task_line(t: dict) -> str:
         parts.append('через %d дн.' % dl)
     if t.get('status') == 'done':
         parts.append('✓ сделано')
+    if t.get('status') == 'deleted':
+        parts.append('🗑 удалена')
     if t.get('is_today'):
         parts.append('[сегодня]')
     if t.get('carry_count'):
@@ -264,7 +294,7 @@ class Tools(object):
              'inputSchema': {'type': 'object', 'properties': {'task_id': task_id, 'answers': _answers_schema(True)},
                              'required': ['task_id', 'answers'], 'additionalProperties': False}},
             {'name': 'fokus_edit',
-             'description': 'Изменить название и/или заметку задачи.',
+             'description': 'Изменить название и/или заметку задачи. Пациенты — только номер tomedo, без имён.',
              'inputSchema': {'type': 'object', 'properties': {'task_id': task_id,
                                                               'title': {'type': 'string', 'minLength': 1, 'maxLength': 200},
                                                               'note': {'type': 'string', 'maxLength': 2000}},
@@ -284,6 +314,21 @@ class Tools(object):
              'description': 'Настройки Fokus: веса вопросов, пороги групп, лимит задач в день, язык.',
              'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
         ]
+
+    ANNOTATIONS = {'fokus_today': ('Сегодня', {'readOnlyHint': True}), 'fokus_preview': ('Итог мастера (без сохранения)', {'readOnlyHint': True}), 'fokus_add_task': ('Добавить задачу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_board': ('Доска групп', {'readOnlyHint': True}), 'fokus_list_tasks': ('Список задач', {'readOnlyHint': True}), 'fokus_get_task': ('Задача', {'readOnlyHint': True}), 'fokus_done': ('Готово', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reopen': ('Вернуть', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_add': ('В «Сегодня»', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_remove': ('Убрать из дня', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_move': ('Перенести в группу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reevaluate': ('Пройти вопросы заново', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_edit': ('Изменить название', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_delete': ('Удалить', {'readOnlyHint': False, 'destructiveHint': True, 'idempotentHint': True}), 'fokus_review': ('Нужна переоценка', {'readOnlyHint': True}), 'fokus_journal': ('Журнал', {'readOnlyHint': True}), 'fokus_settings': ('Настройки', {'readOnlyHint': True})}
+
+    def definitions_annotated(self) -> List[dict]:
+        out = []
+        for tool in self.definitions():
+            title, hints = self.ANNOTATIONS.get(tool['name'], (None, {}))
+            item = dict(tool)
+            if title:
+                item['title'] = title
+            annotations = dict(hints)
+            annotations['openWorldHint'] = False  # только локальный Fokus, не интернет
+            item['annotations'] = annotations
+            out.append(item)
+        return out
 
     # ---- выполнение
     def call(self, name: str, args: dict) -> Tuple[str, Any, bool]:
@@ -311,11 +356,31 @@ class Tools(object):
         return 'Ошибка %d' % status, data, True
 
     @staticmethod
-    def _tid(args: dict, key: str = 'task_id') -> int:
+    def _int_arg(args: dict, key: str, low: int, high: int, what: str) -> int:
         value = args.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value or value < 1:
-            raise ValueError('%s: нужен целый id ≥ 1' % key)
-        return int(value)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('%s: %s' % (key, what))
+        if isinstance(value, float) and (not math.isfinite(value) or value != int(value)):
+            raise ValueError('%s: %s' % (key, what))
+        value = int(value)
+        if not low <= value <= high:
+            raise ValueError('%s: %s' % (key, what))
+        return value
+
+    @classmethod
+    def _tid(cls, args: dict, key: str = 'task_id') -> int:
+        return cls._int_arg(args, key, 1, 2 ** 63 - 1, 'нужен целый id ≥ 1')
+
+    @staticmethod
+    def _enum(args: dict, key: str, allowed: List[str], required: bool = False) -> Optional[str]:
+        value = args.get(key)
+        if value is None:
+            if required:
+                raise ValueError('%s: обязательный параметр, одно из %s' % (key, ', '.join(allowed)))
+            return None
+        if not isinstance(value, str) or value not in allowed:
+            raise ValueError('%s: одно из %s' % (key, ', '.join(allowed)))
+        return value
 
     def tool_today(self, args: dict) -> Tuple[str, Any, bool]:
         status, d = self._api('GET', '/api/today')
@@ -372,8 +437,8 @@ class Tools(object):
         return text, result, False
 
     def tool_board(self, args: dict) -> Tuple[str, Any, bool]:
-        sort = args.get('sort') or 'score'
-        status, d = self._api('GET', '/api/board?sort=%s' % sort)
+        sort = self._enum(args, 'sort', ['score', 'due', 'created']) or 'score'
+        status, d = self._api('GET', '/api/board?' + urllib.parse.urlencode({'sort': sort}))
         if status != 200:
             return self._error(status, d)
         lines = []
@@ -387,13 +452,16 @@ class Tools(object):
         return '\n'.join(lines), d, False
 
     def tool_list_tasks(self, args: dict) -> Tuple[str, Any, bool]:
-        qs = []
-        for key in ('group', 'due', 'who', 'duration', 'status', 'sort'):
-            if args.get(key):
-                qs.append('%s=%s' % (key, args[key]))
+        params = []
+        for key, allowed in (('group', GROUP_ENUM), ('due', ANSWER_PROPERTIES['due']['enum']),
+                             ('who', ANSWER_PROPERTIES['who']['enum']), ('duration', ANSWER_PROPERTIES['duration']['enum']),
+                             ('status', ['open', 'done', 'all']), ('sort', ['score', 'due', 'created'])):
+            value = self._enum(args, key, allowed)
+            if value:
+                params.append((key, value))
         if args.get('needs_review'):
-            qs.append('needs_review=1')
-        status, d = self._api('GET', '/api/tasks' + ('?' + '&'.join(qs) if qs else ''))
+            params.append(('needs_review', '1'))
+        status, d = self._api('GET', '/api/tasks' + ('?' + urllib.parse.urlencode(params) if params else ''))
         if status != 200:
             return self._error(status, d)
         lines = ['Найдено: %d' % len(d['tasks'])] + ['  ' + _task_line(t) for t in d['tasks']]
@@ -443,7 +511,8 @@ class Tools(object):
         return 'Убрано из «Сегодня». Осталось %d, свободных мест: %d' % (len(d['tasks']), d['free_slots']), d, False
 
     def tool_move(self, args: dict) -> Tuple[str, Any, bool]:
-        return self._simple('POST', '/api/tasks/%d/move' % self._tid(args), 'Перенесено (вручную): ', {'group': args.get('group')})
+        group = self._enum(args, 'group', GROUP_ENUM, required=True)
+        return self._simple('POST', '/api/tasks/%d/move' % self._tid(args), 'Перенесено (вручную): ', {'group': group})
 
     def tool_reevaluate(self, args: dict) -> Tuple[str, Any, bool]:
         status, d = self._api('POST', '/api/tasks/%d/evaluate' % self._tid(args), {'answers': args.get('answers') or {}})
@@ -460,6 +529,8 @@ class Tools(object):
         for key in ('title', 'note'):
             if args.get(key) is not None:
                 body[key] = args[key]
+        if not body:
+            raise ValueError('укажите title и/или note')
         return self._simple('PATCH', '/api/tasks/%d' % self._tid(args), 'Изменено: ', body)
 
     def tool_delete(self, args: dict) -> Tuple[str, Any, bool]:
@@ -483,7 +554,7 @@ class Tools(object):
         if args.get('task_id') is not None:
             qs.append('task_id=%d' % self._tid(args))
         if args.get('limit') is not None:
-            qs.append('limit=%d' % int(args['limit']))
+            qs.append('limit=%d' % self._int_arg(args, 'limit', 1, 1000, 'целое 1..1000'))
         status, d = self._api('GET', '/api/journal' + ('?' + '&'.join(qs) if qs else ''))
         if status != 200:
             return self._error(status, d)
@@ -543,7 +614,10 @@ class McpServer(object):
 
     # ---- транспорт
     def send(self, message: dict) -> None:
-        data = (json.dumps(message, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+        try:
+            data = (json.dumps(message, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+        except UnicodeEncodeError:  # одиночные суррогаты из входа (\ud800) — отдаём в escape-форме
+            data = (json.dumps(message, ensure_ascii=True, separators=(',', ':')) + '\n').encode('ascii')
         self.writer.write(data)
         self.writer.flush()
 
@@ -563,14 +637,19 @@ class McpServer(object):
                 continue
             try:
                 message = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 self.fail(None, -32700, 'Parse error')
                 continue
-            if isinstance(message, list):  # batch (устаревший, но поддержим)
-                for item in message:
-                    self.handle(item)
-            else:
-                self.handle(message)
+            try:
+                if isinstance(message, list):  # batch (устаревший, но поддержим)
+                    if not message:
+                        self.fail(None, -32600, 'Invalid Request')
+                    for item in message:
+                        self.handle(item)
+                else:
+                    self.handle(message)
+            except Exception as e:  # страховка: одно сообщение не должно убить сервер
+                log('необработанная ошибка: %r' % e)
 
     # ---- диспетчер
     def handle(self, message: Any) -> None:
@@ -579,10 +658,20 @@ class McpServer(object):
             return
         msg_id = message.get('id')
         method = message.get('method')
-        params = message.get('params') or {}
-        if method is None:
+        params = message.get('params')
+        if method is None and ('result' in message or 'error' in message):
             return  # ответ клиента (на наш ping и т.п.) — игнорируем
         is_notification = 'id' not in message
+        if not isinstance(method, str):
+            if not is_notification:
+                self.fail(msg_id, -32600, 'Invalid Request')
+            return
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            if not is_notification:
+                self.fail(msg_id, -32602, 'Invalid params')
+            return
         try:
             result = self.dispatch(method, params)
         except McpError as e:
@@ -621,18 +710,20 @@ class McpServer(object):
         if method == 'ping':
             return {}
         if method == 'tools/list':
-            return {'tools': self.tools.definitions()}
+            return {'tools': self.tools.definitions_annotated()}
         if method == 'tools/call':
             name = params.get('name')
-            args = params.get('arguments') or {}
-            if not isinstance(name, str):
-                raise McpError(-32602, 'Invalid params: name')
+            args = params.get('arguments')
+            if args is None:
+                args = {}
+            if not isinstance(name, str) or not isinstance(args, dict):
+                raise McpError(-32602, 'Invalid params: name/arguments')
             known = set(t['name'] for t in self.tools.definitions())
             if name not in known:
                 raise McpError(-32602, 'Unknown tool: %s' % name)
             try:
                 text, structured, is_error = self.tools.call(name, args)
-            except ValueError as e:
+            except (ValueError, TypeError, OverflowError) as e:
                 text, structured, is_error = 'Неверные параметры: %s' % e, None, True
             result = {'content': [{'type': 'text', 'text': text}], 'isError': bool(is_error)}  # type: Dict[str, Any]
             if structured is not None and isinstance(structured, dict) and not is_error:
@@ -642,8 +733,11 @@ class McpServer(object):
             return {'prompts': PROMPTS}
         if method == 'prompts/get':
             name = params.get('name')
+            arguments = params.get('arguments')
+            if arguments is not None and not isinstance(arguments, dict):
+                raise McpError(-32602, 'Invalid params: arguments')
             try:
-                text = prompt_text(name, params.get('arguments') or {})
+                text = prompt_text(name, arguments or {})
             except KeyError:
                 raise McpError(-32602, 'Unknown prompt: %s' % name)
             return {'description': PROMPTS[0]['description'],
@@ -688,6 +782,8 @@ def install(path: Optional[str] = None) -> str:
             if not isinstance(config, dict):
                 raise ValueError('%s: ожидается JSON-объект' % path)
         backup = path + '.bak'
+        if os.path.exists(backup):  # не затирать самую первую копию
+            backup = path + '.bak-' + time.strftime('%Y%m%d-%H%M%S')
         with open(backup, 'w', encoding='utf-8') as f:
             f.write(text)
     servers = config.get('mcpServers')
@@ -711,11 +807,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     if '--install' in argv:
         target = None
         if '--path' in argv:
-            target = argv[argv.index('--path') + 1]
-        path = install(target)
+            idx = argv.index('--path') + 1
+            if idx >= len(argv):
+                sys.stderr.write('--path: укажите путь к файлу конфигурации\n')
+                return 2
+            target = argv[idx]
+        try:
+            path = install(target)
+        except (ValueError, OSError) as e:
+            sys.stderr.write('Не удалось прописать конфиг: %s\nПроверьте файл вручную или используйте --config.\n' % e)
+            return 1
         print('Прописано в %s (копия старого файла рядом, .bak). Перезапустите Claude Desktop.' % path)
         return 0
-    port = int(os.environ.get('FOKUS_PORT', '4321') or 4321)
+    raw_port = os.environ.get('FOKUS_PORT', '4321').strip() or '4321'
+    if not raw_port.isdigit() or not 1 <= int(raw_port) <= 65535:
+        log('FOKUS_PORT: ожидается число 1..65535, получено %r' % raw_port)
+        return 2
+    port = int(raw_port)
     autostart = os.environ.get('FOKUS_MCP_AUTOSTART', '1').strip() not in ('0', 'false', 'no')
     client = FokusClient(port, autostart=autostart)
     server = McpServer(Tools(client))

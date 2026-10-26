@@ -241,7 +241,7 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | Метод | Путь | Тело / параметры | Ответ |
 |---|---|---|---|
 | GET | `/` | | `static/index.html` |
-| GET | `/api/health` | | `{ok:true, version:"1.0", today:"YYYY-MM-DD", db:"путь"}` |
+| GET | `/api/health` | | `{ok:true, version:"1.0", today:"YYYY-MM-DD", db:"путь", pid:int}` |
 | GET | `/api/i18n?lang=ru` | | словарь строк (блок E) |
 | GET | `/api/settings` | | настройки §4.2 |
 | PUT | `/api/settings` | частичный объект | итоговые настройки; 400 при невалидных |
