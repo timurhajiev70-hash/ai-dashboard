@@ -440,6 +440,10 @@ class App(object):
         port = self.port or DEFAULT_PORT
         return ('http://127.0.0.1:%d' % port, 'http://localhost:%d' % port)
 
+    def allowed_hosts(self) -> set:
+        port = self.port or DEFAULT_PORT
+        return {'127.0.0.1:%d' % port, 'localhost:%d' % port}
+
     def origin_allowed(self, origin: str) -> bool:
         return origin.strip().rstrip('/').lower() in self.allowed_origins()
 
@@ -461,6 +465,10 @@ class App(object):
         origin = headers.get('Origin') if headers is not None else None
         if origin is not None and not self.origin_allowed(origin):
             raise ApiError(403, 'forbidden_origin', 'запрос с чужого сайта отклонён')
+        # Host: защита от DNS-rebinding — читать API может только запрос, адресованный самому Fokus
+        host = (headers.get('Host') or '') if headers is not None else ''
+        if host.strip().lower() not in self.allowed_hosts():
+            raise ApiError(403, 'forbidden_host', 'запрос с чужим именем хоста отклонён')
 
         body = self.parse_body(body_bytes)
         day = self.today_fn()
@@ -1117,7 +1125,7 @@ class App(object):
         raw_task = req.param('task_id')
         task_id = None
         if raw_task is not None:
-            if not raw_task.isdigit():
+            if not raw_task.isdigit() or not 0 < int(raw_task) < 2 ** 63:
                 raise _validation('task_id')
             task_id = int(raw_task)
         limit = _int_param(req.param('limit'), 'limit', 1, JOURNAL_MAX_LIMIT, JOURNAL_DEFAULT_LIMIT)

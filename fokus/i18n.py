@@ -234,6 +234,7 @@ RU = {
     'today_replace': 'Заменить одну из задач дня',
     'today_full_short': 'День полный',
     'calendar_error': 'Календарь: ошибка загрузки — проверь адрес в Настройках',
+    'calendar_busy': 'Подождите: календарь ещё обновляется',
     'calendar_updated': 'обновлено {time}',
     'all_day': 'весь день',
     # ---- v2: Входящие / Предстоящие / Переоценка
@@ -512,6 +513,7 @@ DE = {
     'today_replace': 'Eine Tagesaufgabe ersetzen',
     'today_full_short': 'Tag ist voll',
     'calendar_error': 'Kalender: Ladefehler — Adresse in den Einstellungen prüfen',
+    'calendar_busy': 'Bitte warten: der Kalender wird noch aktualisiert',
     'calendar_updated': 'aktualisiert {time}',
     'all_day': 'ganztägig',
     'inbox_desc': 'Aufgaben ohne Bewertung. Beantworte die 6 Fragen — die Aufgabe landet in ihrer Gruppe.',

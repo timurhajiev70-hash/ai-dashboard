@@ -13,14 +13,14 @@
    ============================================================ */
 :root {
   --bg: #1f1f1f; --side: #282828; --card: #2a2a2a; --hover: #333333; --border: #3a3a3a; --border-soft: #313131;
-  --text: #f2f2f2; --muted: #a3a3a3; --faint: #6f6f6f; --accent: #e5484d; --accent-text: #fff;
+  --text: #f2f2f2; --muted: #a3a3a3; --faint: #8c8c8c; --accent: #d13a3f; --accent-text: #fff; --warn: #ffd38a;
   --ok: #3fb950; --link: #7cb3ff; --shadow: 0 12px 40px rgba(0,0,0,.55);
   --g-now: #e5484d; --g-priority: #f5a623; --g-queue: #3b82f6; --g-delegate: #d4d4d8; --g-someday: #6b6b70; --g-waiting: #8b5cf6; --g-inbox: #a3a3a3;
   --side-w: 262px; --detail-w: 400px; --radius: 10px; --fs: 15px;
 }
 :root[data-theme="light"] {
   --bg: #ffffff; --side: #fcfaf8; --card: #f6f4f2; --hover: #f1efec; --border: #e5e2de; --border-soft: #eeebe7;
-  --text: #202020; --muted: #6b6b6b; --faint: #a0a0a0; --accent: #db4c3f; --ok: #2e9e46; --link: #2563eb; --shadow: 0 12px 40px rgba(0,0,0,.18);
+  --text: #202020; --muted: #6b6b6b; --faint: #767676; --accent: #c53d33; --warn: #8a5a00; --ok: #2e9e46; --link: #2563eb; --shadow: 0 12px 40px rgba(0,0,0,.18);
   --g-delegate: #8a8a8f; --g-someday: #9a9a9f; --g-inbox: #8a8a8f;
 }
 * { box-sizing: border-box; }
@@ -195,7 +195,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
   <button class="menu-btn" id="menu-btn" title="Меню">☰</button>
   <div class="nav-overlay" id="nav-overlay"></div>
   <aside class="sidebar" id="sidebar"></aside>
-  <main><div class="main-inner" id="main"></div></main>
+  <main><div class="main-inner"><div id="composer-slot"></div><div id="main"></div></div></main>
   <aside class="detail" id="detail"></aside>
 </div>
 <script>
@@ -210,7 +210,6 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
     lang: 'ru', L: {}, settings: null, projects: [], counts: {}, review: 0, today: { n: 0, limit: 3 }, serverToday: '',
     route: { view: 'today', arg: null }, sort: 'score', chip: '', composer: null, detailId: null, wiz: null, showDone: false
   };
-  let busy = false;
 
   // ------------------------------------------------------------ утилиты
   const $ = (s) => document.querySelector(s);
@@ -253,7 +252,13 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
   function dueClass(task) { if (task.days_left === null || task.days_left === undefined) return ''; if (task.days_left < 0) return 'overdue'; if (task.days_left === 0) return 'today'; if (task.days_left === 1) return 'tomorrow'; return ''; }
   function whoLabel(task) { return task.who === 'delegate' ? (task.delegate_to ? t('who_delegate_to', { name: task.delegate_to }) : t('who_delegate')) : t('who_me'); }
   function groupName(g) { return t('group_' + g); }
-  async function guarded(fn) { if (busy) return; busy = true; try { return await fn(); } finally { busy = false; } }
+  const busyKeys = new Set();
+  async function guarded(fn, key) {
+    const k = key || fn.toString();  // одинаковое действие не запускается дважды; разные — независимы
+    if (busyKeys.has(k)) return;
+    busyKeys.add(k);
+    try { return await fn(); } finally { busyKeys.delete(k); }
+  }
 
   async function api(method, path, body) {
     let res;
@@ -300,7 +305,12 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
     return { view: h[0] || 'today', arg: h[1] ? decodeURIComponent(h[1]) : null };
   }
   function go(view, arg) { location.hash = '#/' + view + (arg ? '/' + encodeURIComponent(arg) : ''); }
-  window.addEventListener('hashchange', () => { state.route = parseHash(); state.chip = ''; closeComposer(); render(); });
+  window.addEventListener('hashchange', async () => {
+    const pend = state.pendingComposer; state.pendingComposer = null;
+    state.route = parseHash(); state.chip = ''; closeComposer();
+    await render();
+    if (pend) openComposer(pend);
+  });
 
   async function refreshSidebar() {
     try {
@@ -361,7 +371,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
         toast(t(reopen ? 'reopen_toast' : 'done_toast', { title: task.title }), 'ok', reopen ? null : { label: t('undo'), fn: () => guarded(async () => { try { await api('POST', '/api/tasks/' + task.id + '/reopen'); await afterChange(); } catch (e) { showError(e); } }) });
         await afterChange();
       } catch (e) { showError(e); }
-    });
+    }, 'done:' + task.id);
   }
   function deleteTask(task) {
     if (!window.confirm(t('confirm_delete', { title: task.title }))) return;
@@ -446,19 +456,15 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
   // ------------------------------------------------------------ композер (быстрое добавление)
   function openComposer(preset) {
     preset = preset || {};
-    if (state.route.view === 'settings') go('inbox');
+    if (state.route.view === 'settings') { state.pendingComposer = preset; go('inbox'); return; }  // откроем после перехода
     state.composer = { title: preset.title || '', note: '', project: preset.project || (state.route.view === 'project' && state.route.arg) || (state.settings && state.settings.default_project) || 'praxis' };
     renderComposer();
   }
   function closeComposer() { state.composer = null; const c = $('#composer'); if (c) c.remove(); }
   function renderComposer() {
-    const main = $('#main'); const old = $('#composer');
+    const slot = $('#composer-slot'); const old = $('#composer');
     const c = state.composer;
-    if (old) {  // перерисовка во время набора текста не должна терять введённое
-      const ot = old.querySelector('input.ttl'), on = old.querySelector('textarea');
-      if (c && ot) c.title = ot.value; if (c && on) c.note = on.value;
-      old.remove();
-    }
+    if (old) old.remove();
     if (!c) return;
     const title = el('input', { class: 'ttl', type: 'text', maxlength: '200', placeholder: t('composer_placeholder'), value: c.title });
     const note = el('textarea', { rows: '1', placeholder: t('composer_note') }); note.value = c.note;
@@ -479,7 +485,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
         el('button', { class: 'btn ghost small', text: t('btn_cancel'), onclick: closeComposer }),
         el('button', { class: 'btn small', text: t('composer_inbox'), onclick: () => submit('inbox') }),
         el('button', { class: 'btn small primary', text: t('composer_evaluate'), onclick: () => submit('evaluate') })));
-    main.insertBefore(box, main.firstChild ? main.firstChild.nextSibling : null);
+    slot.appendChild(box);
     setTimeout(() => title.focus(), 0);
   }
 
@@ -569,7 +575,11 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
         if (w.mode === 'reeval') {
           const r = await api('POST', '/api/tasks/' + w.task.id + '/evaluate', { answers: answers });
           toast(t('summary_reeval_saved', { group: groupName(r.task.group), score: fmtScore(r.task.score) }), 'ok');
-          w.modal.close(); await afterChange(); return;
+          w.modal.close(); await afterChange();
+          if (r.task.group === 'now' && state.today.n < state.today.limit) {
+            modal(t('summary_saved_today_offer'), el('p', { text: r.task.title }), [{ label: t('btn_cancel') }, { label: t('btn_to_today'), cls: 'primary', onclick: () => addToToday(r.task) }]);
+          }
+          return;
         }
         const r = await api('POST', '/api/tasks', { title: w.title, note: w.note, project: w.project, answers: answers });
         const task = r.task; w.modal.close(); closeComposer();
@@ -652,7 +662,6 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
       else if (r.view === 'settings') await viewSettings(main);
       else { go('today'); return; }
     } catch (e) { clear(main); main.appendChild(el('div', { class: 'empty', text: (e.data && e.data.message) || t('error_network') })); }
-    if (state.composer) renderComposer();
     renderSidebar();
   }
 
@@ -794,14 +803,18 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
     const status = el('div', { class: 'muted small', style: { marginTop: '8px' } });
     const cache = s.calendar_cache;
     status.textContent = (s.calendar_urls || []).length ? (cache && cache.fetched_at ? t('settings_calendar_status', { n: cache.events_count !== undefined ? cache.events_count : (cache.events || []).length, time: fmtTs(cache.fetched_at) }) + ((cache.errors || []).length ? ' · ' + t('calendar_error') : '') : t('settings_calendar_none')) : t('settings_calendar_none');
-    const refreshBtn = el('button', { class: 'btn small', text: t('settings_calendar_check'), onclick: () => guarded(async () => {
-      try { await saveSettings(); const r = await api('POST', '/api/calendar/refresh'); status.textContent = t('settings_calendar_status', { n: r.events_count, time: fmtTs(r.fetched_at) }) + ((r.errors || []).length ? ' · ' + t('calendar_error') : ''); toast(t('saved'), 'ok'); }
-      catch (e) { showError(e); }
-    }) });
+    const refreshBtn = el('button', { class: 'btn small', text: t('settings_calendar_check'), onclick: () => {
+      if (busyKeys.has('calendar')) { toast(t('calendar_busy'), 'err'); return; }
+      guarded(async () => {
+        status.textContent = t('loading');
+        try { await saveSettings(); const r = await api('POST', '/api/calendar/refresh'); status.textContent = t('settings_calendar_status', { n: r.events_count, time: fmtTs(r.fetched_at) }) + ((r.errors || []).length ? ' · ' + t('calendar_error') : ''); toast(t('saved'), 'ok'); }
+        catch (e) { showError(e); }
+      }, 'calendar');
+    } });
     main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_calendar') }),
       el('div', { class: 'field' }, el('label', { text: t('settings_calendar_urls') }), urls),
       el('p', { class: 'muted small', text: t('settings_calendar_help', { min: s.calendar_refresh_min || 15 }) }),
-      el('p', { class: 'small', style: { color: '#ffd38a' }, text: t('settings_calendar_warn') }),
+      el('p', { class: 'small', style: { color: 'var(--warn)' }, text: t('settings_calendar_warn') }),
       el('div', { class: 'grid2' }, el('div', { class: 'field' }, el('label', { text: t('settings_timezone') }), tz), num('calendar_refresh_min', 'settings_refresh_min', '1', '5', '1440')),
       el('div', { class: 'row', style: { marginTop: '10px' } }, refreshBtn, status)));
     // проекты
