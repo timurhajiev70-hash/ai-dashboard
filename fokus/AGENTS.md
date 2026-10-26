@@ -33,9 +33,10 @@ fokus/
   db.py                — схема SQLite, CRUD, журнал, бэкап, настройки (блок A)
   engine.py            — чистые функции: балл, группа, подсказки, топ-3, перенос (блок B)
   i18n.py              — строки интерфейса RU/DE, отдаются как /api/i18n (блок E)
+  mcp_server.py        — MCP-сервер (stdio) для Claude Desktop / Claude Code / агента «Мир» (§11)
   static/index.html    — интерфейс, 5 экранов (блок D)
   data/fokus.db, data/backups/   — данные (в .gitignore)
-  tests/test_engine.py, test_db.py, test_api.py, test_reference.py — unittest, запуск: python3 -m unittest discover -s tests
+  tests/test_engine.py, test_db.py, test_api.py, test_reference.py, test_i18n.py, test_launcher.py, test_mcp.py — unittest, запуск: python3 -m unittest discover -s tests
 ```
 
 ## 3. Словарь значений (коды хранятся в БД и API; подписи RU/DE — в i18n)
@@ -315,3 +316,19 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 2. Нужна ли оценка по `who='me'` в балле (сейчас 0)?
 3. Выполненные задачи: показывать статистику «сделано за неделю»? (в v1 — нет)
 4. Нужен ли экспорт задач (JSON/CSV)? (в v1 — нет, есть бэкап БД)
+
+## 11. MCP-сервер (mcp_server.py)
+Fokus доступен ИИ-агентам по Model Context Protocol (транспорт stdio, JSON-RPC 2.0 по строкам). Реализация — только stdlib.
+| Решение | Почему |
+|---|---|
+| Тонкий клиент к HTTP API (§7), а не прямой доступ к БД | вся логика (баллы, лимит дня, авто-перенос, Lock) остаётся в одном процессе server.py; два процесса не гоняются за rollover |
+| Если Fokus не запущен — MCP-сервер сам запускает `server.py` (отключить: `FOKUS_MCP_AUTOSTART=0`); stdout сервера уходит в `data/server.log` | в stdout MCP-процесса допустим только JSON-RPC |
+| Версии протокола: `2024-11-05`, `2025-03-26`, `2025-06-18` (клиентская, если известна; иначе последняя) | совместимость с Claude Desktop и Claude Code |
+| Ошибки Fokus (400/404/409) → результат инструмента с `isError: true` и человекочитаемым текстом; `day_full` возвращает список задач дня, чтобы агент спросил, какую заменить | агент получает контекст для следующего шага, а не исключение |
+| Результат инструмента: `content[0].text` (краткая сводка по-русски) + `structuredContent` (ответ API как есть) | текст — для модели, структура — для точных id/баллов |
+
+Инструменты: `fokus_today`, `fokus_preview`, `fokus_add_task` (с `add_to_today`), `fokus_board`, `fokus_list_tasks`, `fokus_get_task`,
+`fokus_done`, `fokus_reopen`, `fokus_today_add` (с `replace_id`), `fokus_today_remove`, `fokus_move`, `fokus_reevaluate`, `fokus_edit`,
+`fokus_delete`, `fokus_review`, `fokus_journal`, `fokus_settings`. Промпт `fokus_wizard` — сценарий 6 вопросов для агента.
+Коды ответов (`today`, `5m`, `now` …) те же, что в §3. Установка: `python3 mcp_server.py --install` (Claude Desktop, со слиянием конфига и копией `.bak`)
+или `claude mcp add fokus -- python3 ~/Projects/fokus/mcp_server.py` (Claude Code). Тесты: `tests/test_mcp.py`.

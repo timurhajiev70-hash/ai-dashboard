@@ -60,6 +60,23 @@ ln -s ~/Projects/fokus/Fokus.command ~/Desktop/Fokus.command
 
 Пример: `FOKUS_PORT=4322 ./Fokus.command`.
 
+## Подключение к Claude (MCP)
+
+Fokus умеет работать как MCP-сервер: Claude Desktop, Claude Code или агент «Мир» могут добавлять задачи через мастер
+из 6 вопросов, смотреть «Сегодня», отмечать «готово». Ничего устанавливать не нужно — `mcp_server.py` на стандартной библиотеке.
+
+| Где | Как подключить |
+|---|---|
+| Claude Desktop | `cd ~/Projects/fokus && python3 mcp_server.py --install`, затем перезапустить Claude Desktop (старый конфиг сохраняется рядом как `.bak`) |
+| Claude Code | `claude mcp add fokus -- python3 ~/Projects/fokus/mcp_server.py` |
+| Вручную / другой клиент | `python3 mcp_server.py --config` печатает JSON для `mcpServers` |
+
+Как это работает: MCP-сервер ходит в API Fokus на `127.0.0.1:4321`; если Fokus не запущен, запускает `server.py` сам
+(выключить: `FOKUS_MCP_AUTOSTART=0`). Инструменты: `fokus_today`, `fokus_add_task`, `fokus_preview`, `fokus_board`, `fokus_done`,
+`fokus_today_add`, `fokus_reevaluate`, `fokus_move`, `fokus_review`, `fokus_journal` и др.; промпт `fokus_wizard` — сценарий вопросов для агента.
+
+Пример диалога: «добавь в Fokus задачу: позвонить в налоговую» → Claude задаёт 6 вопросов → показывает группу и балл → сохраняет → предлагает поставить в «Сегодня».
+
 ## Тесты
 
 ```bash
@@ -74,6 +91,7 @@ python3 -m unittest tests.test_launcher -v     # один файл
 | `tests/test_db.py` | схема, CRUD, журнал, бэкап, настройки |
 | `tests/test_api.py` | HTTP API |
 | `tests/test_launcher.py` | `Fokus.command`: синтаксис, права, поведение без Python, ярлык-ссылка, реальный запуск сервера |
+| `tests/test_mcp.py` | MCP-сервер: протокол по stdio, инструменты, установка конфига |
 
 В тестах только обезличенные данные.
 
