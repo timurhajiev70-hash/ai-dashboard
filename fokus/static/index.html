@@ -177,11 +177,12 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
 
 /* --- узкие экраны --------------------------------------------------- */
 .menu-btn { display: none; position: fixed; top: 10px; left: 10px; z-index: 40; width: 38px; height: 38px; border-radius: 9px; background: var(--side); border: 1px solid var(--border); font-size: 18px; }
+.nav-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 44; }  /* вне сетки: иначе занимает ячейку grid */
 @media (max-width: 960px) {
   .app, .app.detail-open { grid-template-columns: 1fr; }
   aside.sidebar { position: fixed; inset: 0 auto 0 0; width: var(--side-w); z-index: 45; transform: translateX(-100%); transition: transform .18s; box-shadow: var(--shadow); }
   .app.nav-open aside.sidebar { transform: none; }
-  .nav-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 44; display: none; } .app.nav-open .nav-overlay { display: block; }
+  .app.nav-open .nav-overlay { display: block; }
   .menu-btn { display: grid; place-items: center; }
   .main-inner { padding: 60px 16px 120px; }
   aside.detail { position: fixed; inset: 0; width: 100%; z-index: 46; }
@@ -283,10 +284,12 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
       buttons.forEach((b) => bar.appendChild(el('button', { class: 'btn ' + (b.cls || ''), text: b.label, onclick: () => { if (b.onclick) b.onclick(); if (!b.keep) close(); } })));
       box.appendChild(bar);
     }
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();  // клавиши сразу идут в модалку
     document.body.appendChild(overlay);
     const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } else if (opts.onkey) opts.onkey(ev); };
     document.addEventListener('keydown', onKey);
-    setTimeout(() => { const f = box.querySelector('input, textarea, button'); if (f) f.focus(); }, 0);
+    const focusFirst = () => { const f = box.querySelector('input, textarea, button'); if (f && !box.contains(document.activeElement)) f.focus(); };
+    focusFirst(); setTimeout(focusFirst, 0);
     function close() { overlay.remove(); document.removeEventListener('keydown', onKey); if (opts.onclose) opts.onclose(); }
     return { close: close, box: box };
   }
@@ -449,8 +452,14 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
   }
   function closeComposer() { state.composer = null; const c = $('#composer'); if (c) c.remove(); }
   function renderComposer() {
-    const main = $('#main'); const old = $('#composer'); if (old) old.remove();
-    const c = state.composer; if (!c) return;
+    const main = $('#main'); const old = $('#composer');
+    const c = state.composer;
+    if (old) {  // перерисовка во время набора текста не должна терять введённое
+      const ot = old.querySelector('input.ttl'), on = old.querySelector('textarea');
+      if (c && ot) c.title = ot.value; if (c && on) c.note = on.value;
+      old.remove();
+    }
+    if (!c) return;
     const title = el('input', { class: 'ttl', type: 'text', maxlength: '200', placeholder: t('composer_placeholder'), value: c.title });
     const note = el('textarea', { rows: '1', placeholder: t('composer_note') }); note.value = c.note;
     const sel = el('select', { onchange: (ev) => { c.project = ev.target.value; } }, state.projects.map((p) => el('option', { value: p.id, selected: p.id === c.project }, p.name)));
