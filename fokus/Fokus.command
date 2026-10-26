@@ -1,9 +1,12 @@
 #!/bin/bash
 # Fokus.command — лаунчер Fokus для macOS. Запуск двойным кликом в Finder или из Терминала.
+# Для запуска без Терминала используйте Fokus.app (двойной клик) — см. README.
 #
 # Что делает:
 #   1. переходит в папку проекта (разрешает символическую ссылку, если ярлык лежит на рабочем столе);
-#   2. если Fokus уже отвечает на /api/health — просто открывает браузер и выходит;
+#   2. если Fokus уже отвечает на /api/health (например, запущен через Fokus.app) — в Терминале спрашивает:
+#      [o] открыть браузер, [s] остановить сервер (POST /api/shutdown, запасной путь — kill по pid из /api/health),
+#      [q] выход; без терминала (из тестов) — просто открывает браузер и выходит;
 #   3. проверяет Python 3 (>= 3.9), запускает `python3 server.py` в фоне;
 #   4. ждёт до 5 секунд ответа /api/health, открывает браузер;
 #   5. держит окно Терминала открытым, пока работает сервер. Ctrl+C или закрытие окна останавливают его.
@@ -64,22 +67,74 @@ resolve_path() {
   printf '%s/%s\n' "$dir" "$(basename "$target")"
 }
 
-# 0 = на порту уже отвечает Fokus (в ответе /api/health есть "ok").
-is_running() {
-  local body=""
+# http_get URL — тело ответа или пусто (curl, иначе python).
+http_get() {
   if command -v curl >/dev/null 2>&1; then
-    body="$(curl -s --max-time 1 "$HEALTH_URL" 2>/dev/null || true)"
+    curl -s --max-time 1 "$1" 2>/dev/null || true
   elif [ -n "$PYTHON" ]; then
-    body="$("$PYTHON" -c 'import sys, urllib.request
+    "$PYTHON" -c 'import sys, urllib.request
 try:
     print(urllib.request.urlopen(sys.argv[1], timeout=1).read().decode("utf-8", "replace"))
 except Exception:
-    pass' "$HEALTH_URL" 2>/dev/null || true)"
+    pass' "$1" 2>/dev/null || true
   fi
-  case "$body" in
+}
+
+# http_post URL — POST с пустым телом, тело ответа или пусто.
+http_post() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -s --max-time 3 -X POST -H 'Content-Length: 0' "$1" 2>/dev/null || true
+  elif [ -n "$PYTHON" ]; then
+    "$PYTHON" -c 'import sys, urllib.request
+try:
+    req = urllib.request.Request(sys.argv[1], data=b"", method="POST")
+    print(urllib.request.urlopen(req, timeout=3).read().decode("utf-8", "replace"))
+except Exception:
+    pass' "$1" 2>/dev/null || true
+  fi
+}
+
+# 0 = на порту уже отвечает Fokus (в ответе /api/health есть "ok").
+is_running() {
+  case "$(http_get "$HEALTH_URL")" in
     *'"ok"'*) return 0 ;;
   esac
   return 1
+}
+
+# wait_stopped N — ждать до N × 0.5 с, пока Fokus перестанет отвечать; 0 = остановлен.
+wait_stopped() {
+  local i=0
+  while [ "$i" -lt "$1" ]; do
+    is_running || return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  is_running && return 1
+  return 0
+}
+
+# Остановить уже работающий Fokus (например, запущенный через Fokus.app):
+# POST /api/shutdown; если сервер ещё не знает этот маршрут — SIGTERM по pid из /api/health.
+stop_running_server() {
+  local pid
+  pid="$(http_get "$HEALTH_URL" | sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p')"
+  say "Останавливаю Fokus (POST $URL/api/shutdown)…"
+  case "$(http_post "$URL/api/shutdown")" in
+    *'"ok"'*) wait_stopped 10 ;;
+    *) say "Сервер не поддерживает /api/shutdown." ;;
+  esac
+  if is_running && [ -n "$pid" ]; then
+    say "Посылаю SIGTERM процессу $pid."
+    kill "$pid" 2>/dev/null
+    wait_stopped 10
+  fi
+  if is_running; then
+    say "Не удалось остановить Fokus${pid:+ (PID $pid)}. Попробуйте вручную: kill ${pid:-<pid>}"
+    return 1
+  fi
+  say "Fokus остановлен."
+  return 0
 }
 
 open_browser() {
@@ -109,6 +164,8 @@ cd "$(dirname "$SELF")" || fail "Не удалось перейти в папк�
 SCRIPT_DIR="$(pwd -P)"
 DB_PATH="${FOKUS_DB:-$SCRIPT_DIR/data/fokus.db}"
 
+say "Для запуска без Терминала используйте Fokus.app (двойной клик)."
+say ""
 say "Fokus — запуск"
 say "  Папка:  $SCRIPT_DIR"
 say "  Адрес:  $URL"
@@ -119,8 +176,20 @@ say ""
 # ----------------------------------------------------------------- 2. уже запущен?
 
 if is_running; then
-  say "Fokus уже запущен на $URL — открываю браузер."
-  open_browser
+  if [ -t 0 ]; then
+    say "Fokus уже работает на $URL."
+    say "[o] открыть в браузере   [s] остановить (POST /api/shutdown)   [q] выход"
+    read -n1 -r -s -p "Выбор: " choice
+    say ""
+    case "${choice:-o}" in
+      s|S) stop_running_server; exit $? ;;
+      q|Q) exit 0 ;;
+      *)   open_browser ;;
+    esac
+  else
+    say "Fokus уже запущен на $URL — открываю браузер."
+    open_browser
+  fi
   exit 0
 fi
 
