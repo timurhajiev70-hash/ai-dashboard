@@ -437,9 +437,15 @@ table.journal th { color: var(--muted); font-weight: 600; }
       list.style.display = list.style.display === 'none' ? 'block' : 'none';
     } });
     const list = el('div', { style: 'display:none;margin-top:12px' });
-    if (d.candidates.length) {
+    const pool = d.pool || [];
+    if (d.free_slots > 0 && d.candidates.length) {
       list.appendChild(el('h3', { text: t('today_candidates_title') }));
       d.candidates.forEach((c) => list.appendChild(taskRow(c, {})));
+    } else if (d.free_slots === 0 && pool.length) {
+      list.appendChild(el('h3', { text: t('today_pool_title') }));
+      pool.forEach((c) => list.appendChild(taskRow(c, {})));
+    } else if (d.free_slots === 0) {
+      list.appendChild(el('div', { class: 'empty', text: t('today_pool_empty') }));
     } else {
       list.appendChild(el('div', { class: 'empty', text: t('today_no_candidates') }));
     }

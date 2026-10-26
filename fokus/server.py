@@ -552,11 +552,15 @@ class App(object):
         tasks = db.today_tasks(self.conn, req.day)
         pool = [t for t in db.list_tasks(self.conn, group='now', status='open') if not t.get('is_today')]
         candidates = engine.suggest_today(pool, tasks, limit)
+        # pool — все открытые задачи 🔴 вне дня в том же порядке, что и кандидаты
+        # (нужен, когда день полный: пользователь выбирает, на что заменить одну из трёх)
+        ordered_pool = engine.suggest_today(pool, [], max(len(pool), 1))
         return {
             'date': req.day.isoformat(),
             'limit': limit,
             'tasks': self._tasks(tasks, req.day),
             'candidates': self._tasks(candidates, req.day),
+            'pool': self._tasks(ordered_pool, req.day),
             'free_slots': max(0, limit - len(tasks)),
         }
 

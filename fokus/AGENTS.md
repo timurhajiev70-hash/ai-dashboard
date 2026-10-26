@@ -252,7 +252,7 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | POST | `/api/tasks/{id}/done` | | `{task}` |
 | POST | `/api/tasks/{id}/reopen` | | `{task}` |
 | DELETE | `/api/tasks/{id}` | | `{task}` (status=deleted) |
-| GET | `/api/today` | | `{date, limit, tasks:[Task], candidates:[Task], free_slots:int}` |
+| GET | `/api/today` | | `{date, limit, tasks:[Task], candidates:[Task], pool:[Task], free_slots:int}` — `candidates` = предложение на свободные места (пусто при полном дне), `pool` = все открытые задачи 🔴 вне дня (для замены при полном дне) |
 | POST | `/api/today` | `{task_id, replace_id?}` | 200 `{tasks, free_slots}`; 409 `{error:"day_full", limit, tasks}` если мест нет и нет replace_id; 400 `{error:"not_now_group"}` если задача не в группе `now`; 400 `{error:"not_open"}` |
 | DELETE | `/api/today/{task_id}` | | `{tasks, free_slots}` |
 | GET | `/api/board` | `?sort=score|due|created` | `{groups:{now:{count, tasks:[...]}, priority:{...}, queue, delegate, someday, waiting}, review:[Task]}` |

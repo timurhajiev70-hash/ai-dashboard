@@ -73,6 +73,8 @@ RU = {
     'today_full_text': 'Четвёртую добавить нельзя. Какую из трёх заменить?',
     'today_replace_with': 'Заменить на: {title}',
     'today_all_done': 'Все задачи дня сделаны. 🎉',
+    'today_pool_title': 'День полный — заменить одну из трёх на…',
+    'today_pool_empty': 'Все задачи из 🔴 уже выбраны на сегодня.',
     'today_review_hint': 'Эта задача переносилась {n} раз — пройди вопросы заново.',
 
     # мастер
@@ -250,6 +252,8 @@ DE = {
     'today_full_text': 'Eine vierte geht nicht. Welche der drei ersetzen?',
     'today_replace_with': 'Ersetzen durch: {title}',
     'today_all_done': 'Alle Tagesaufgaben erledigt. 🎉',
+    'today_pool_title': 'Der Tag ist voll — eine der drei ersetzen durch…',
+    'today_pool_empty': 'Alle Aufgaben aus 🔴 sind bereits für heute gewählt.',
     'today_review_hint': 'Diese Aufgabe wurde {n}× verschoben — beantworte die Fragen erneut.',
 
     'add_title': 'Neue Aufgabe',
