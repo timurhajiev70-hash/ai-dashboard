@@ -124,7 +124,9 @@ class TestMcpProtocol(unittest.TestCase):
         tools = self.s.request('tools/list')['result']['tools']
         names = [t['name'] for t in tools]
         for n in ('fokus_today', 'fokus_add_task', 'fokus_preview', 'fokus_board', 'fokus_done', 'fokus_today_add',
-                  'fokus_reevaluate', 'fokus_move', 'fokus_review', 'fokus_journal'):
+                  'fokus_reevaluate', 'fokus_move', 'fokus_review', 'fokus_journal',
+                  # v2: проекты, «Входящие», календарь, «Предстоящие»
+                  'fokus_inbox', 'fokus_projects', 'fokus_set_project', 'fokus_calendar', 'fokus_upcoming'):
             self.assertIn(n, names)
         for t in tools:
             self.assertEqual(t['inputSchema']['type'], 'object')
@@ -264,7 +266,9 @@ class TestMcpProtocol(unittest.TestCase):
         for ev_name in ('create', 'done', 'reopen', 'manual_move', 'evaluate', 'edit'):
             self.assertIn(ev_name, events)
         board = self.s.call('fokus_board')['structuredContent']
-        self.assertEqual(sorted(board['groups'].keys()), sorted(mcp_server.GROUP_ENUM))
+        # v2: доска содержит 7 групп, включая inbox (§7) — сравниваем со спецификацией, не с GROUP_ENUM
+        self.assertEqual(sorted(board['groups'].keys()),
+                         sorted(['now', 'priority', 'queue', 'delegate', 'someday', 'waiting', 'inbox']))
         self.assertIn('Переоценка никому не нужна', self.s.call('fokus_review')['content'][0]['text'])
         self.assertEqual(self.s.call('fokus_settings')['structuredContent']['day_limit'], 3)
         r = self.s.call('fokus_edit', {'task_id': tid})

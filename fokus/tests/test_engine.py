@@ -116,9 +116,23 @@ class TestConstants(unittest.TestCase):
         self.assertIsNone(s['last_rollover'])
 
     def test_default_settings_has_all_keys(self):
+        # v2: §4.2 — добавлены schema_version, default_project, theme, timezone, calendar_*
         self.assertEqual(set(engine.DEFAULT_SETTINGS.keys()),
                          {'weights', 'thresholds', 'day_limit', 'stale_days',
-                          'carry_limit', 'language', 'last_rollover'})
+                          'carry_limit', 'language', 'last_rollover',
+                          'schema_version', 'default_project', 'theme', 'timezone',
+                          'calendar_urls', 'calendar_refresh_min', 'calendar_cache'})
+
+    def test_default_settings_v2_values(self):
+        # v2: §4.2 — умолчания новых ключей
+        s = engine.DEFAULT_SETTINGS
+        self.assertEqual(s['schema_version'], 2)
+        self.assertEqual(s['default_project'], 'praxis')
+        self.assertEqual(s['theme'], 'dark')
+        self.assertEqual(s['timezone'], 'Europe/Berlin')
+        self.assertEqual(s['calendar_urls'], [])
+        self.assertEqual(s['calendar_refresh_min'], 15)
+        self.assertIsNone(s['calendar_cache'])
 
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1236,111 @@ class TestPlanRollover(unittest.TestCase):
         snapshot = copy.deepcopy(t)
         self.plan([t])
         self.assertEqual(t, snapshot)
+
+    # v2: задачи «Входящих» (group == 'inbox', evaluated == 0) rollover пропускает целиком —
+    # ни carry, ни review (даже если залежалась), ни regroup, ни rescore (§5.6)
+    def test_inbox_tasks_skipped(self):
+        inbox = task(9, 0.0, 'inbox', importance=3, due='none', duration='30m',
+                     created=TODAY - days(30), evaluated=TODAY - days(30), carry_count=5)
+        inbox['evaluated'] = 0
+        regular = task(1, 26.0, 'queue', created=TODAY - days(20), evaluated=TODAY - days(20))
+        p = self.plan([inbox, regular])
+        self.assertNotIn(9, p['carry'])
+        self.assertNotIn(9, p['review'])
+        self.assertNotIn(9, p['regroup'])
+        self.assertNotIn(9, p['rescore'])
+        self.assertEqual(p['review'].get(1), 'stale', 'обычная задача обрабатывается как раньше')
+        self.assertIn(1, p['rescore'])
+
+    def test_only_inbox_tasks_is_empty_plan(self):
+        # v2
+        inbox = task(9, 0.0, 'inbox', created=TODAY - days(30), evaluated=TODAY - days(30))
+        inbox['evaluated'] = 0
+        p = self.plan([inbox])
+        self.assertEqual(p['carry'], [])
+        self.assertEqual(p['review'], {})
+        self.assertEqual(p['regroup'], {})
+        self.assertEqual(p['rescore'], {})
+
+
+# ---------------------------------------------------------------------------
+# v2: §5.6 — «Входящие» (INBOX, INBOX_ANSWERS) и быстрое добавление parse_quick_add
+# ---------------------------------------------------------------------------
+PROJECTS = [{'id': 'praxis', 'name': 'Praxis'}, {'id': 'privat', 'name': 'Privat'},
+            {'id': 'projekt', 'name': 'Projekt'}, {'id': 'nalogi', 'name': 'Налоги'}]
+
+
+class TestInboxConstantsV2(unittest.TestCase):
+    def test_inbox_constant(self):
+        self.assertEqual(engine.INBOX, 'inbox')
+        self.assertNotIn('inbox', engine.GROUPS, 'inbox — не группа матрицы, а состояние «мастер не пройден»')
+
+    def test_inbox_answers_stub(self):
+        self.assertEqual(engine.INBOX_ANSWERS,
+                         {'importance': 3, 'due': 'none', 'consequence': 'none', 'who': 'me',
+                          'delegate_to': '', 'duration': '30m', 'depends_on': ''})
+        # заглушка — валидные ответы мастера
+        self.assertEqual(engine.validate_answers(dict(engine.INBOX_ANSWERS)), engine.INBOX_ANSWERS)
+
+    def test_suggest_today_ignores_inbox(self):
+        inbox = dict(cand(9, 0.0), group='inbox')
+        got = engine.suggest_today([inbox, cand(1, 70.0)], [], 3)
+        self.assertEqual([c['id'] for c in got], [1])
+
+
+class TestParseQuickAddV2(unittest.TestCase):
+    def parse(self, text):
+        return engine.parse_quick_add(text, PROJECTS)
+
+    def test_tag_by_name(self):
+        self.assertEqual(self.parse('Позвонить в налоговую #Praxis'),
+                         {'title': 'Позвонить в налоговую', 'project': 'praxis'})
+
+    def test_tag_case_insensitive_and_by_id(self):
+        self.assertEqual(self.parse('Купить лампочку #privat')['project'], 'privat')
+        self.assertEqual(self.parse('Купить лампочку #PRIVAT')['project'], 'privat')
+        self.assertEqual(self.parse('Купить лампочку #PROJEKT')['project'], 'projekt')
+
+    def test_tag_cyrillic_name(self):
+        self.assertEqual(self.parse('Подать декларацию #Налоги'),
+                         {'title': 'Подать декларацию', 'project': 'nalogi'})
+        self.assertEqual(self.parse('Подать декларацию #налоги')['project'], 'nalogi')
+
+    def test_tag_in_middle_collapses_spaces(self):
+        self.assertEqual(self.parse('Купить  #Privat   лампочку'),
+                         {'title': 'Купить лампочку', 'project': 'privat'})
+
+    def test_tag_at_start(self):
+        self.assertEqual(self.parse('#Privat Купить лампочку'), {'title': 'Купить лампочку', 'project': 'privat'})
+
+    def test_unknown_tag_stays_in_title(self):
+        self.assertEqual(self.parse('Купить лампочку #Nope'), {'title': 'Купить лампочку #Nope', 'project': None})
+
+    def test_tomedo_number_is_not_a_project(self):
+        self.assertEqual(self.parse('Отчёт по пациенту tomedo #48213'),
+                         {'title': 'Отчёт по пациенту tomedo #48213', 'project': None})
+
+    def test_no_tag(self):
+        self.assertEqual(self.parse('Просто задача'), {'title': 'Просто задача', 'project': None})
+
+    def test_whitespace_normalized(self):
+        self.assertEqual(self.parse('   Просто    задача  ')['title'], 'Просто задача')
+
+    def test_only_tag_gives_empty_title(self):
+        r = self.parse('#Privat')
+        self.assertEqual(r['project'], 'privat')
+        self.assertEqual(r['title'], '')
+
+    def test_empty_projects_list(self):
+        self.assertEqual(engine.parse_quick_add('Задача #Privat', []), {'title': 'Задача #Privat', 'project': None})
+
+    def test_result_keys(self):
+        self.assertEqual(set(self.parse('x').keys()), {'title', 'project'})
+
+    def test_input_not_mutated(self):
+        projects = copy.deepcopy(PROJECTS)
+        engine.parse_quick_add('Задача #Privat', projects)
+        self.assertEqual(projects, PROJECTS)
 
 
 if __name__ == '__main__':

@@ -31,11 +31,16 @@ TASK_COLUMNS = {
     'delegate_to', 'duration', 'depends_on', 'score', 'grp', 'group_manual',
     'group_since', 'evaluated_at', 'needs_review', 'review_reason', 'is_today',
     'today_date', 'carry_count', 'status', 'done_at', 'created_at', 'updated_at',
+    'project', 'evaluated',   # v2: §4 — проект задачи и флаг «мастер пройден»
 }
 JOURNAL_COLUMNS = {'id', 'task_id', 'ts', 'event', 'old_value', 'new_value', 'note'}
 GROUPS = ('now', 'priority', 'queue', 'delegate', 'someday', 'waiting')
+GROUPS_V2 = GROUPS + ('inbox',)   # v2: count_by_group → 7 ключей (§6)
 SETTINGS_KEYS = {'weights', 'thresholds', 'day_limit', 'stale_days', 'carry_limit',
-                 'language', 'last_rollover'}
+                 'language', 'last_rollover',
+                 # v2: §4.2 — новые ключи настроек
+                 'schema_version', 'default_project', 'theme', 'timezone',
+                 'calendar_urls', 'calendar_refresh_min', 'calendar_cache'}
 DEFAULT_WEIGHTS = {'importance': 0.45, 'urgency': 0.30, 'consequence': 0.20, 'duration': 0.05}
 DEFAULT_THRESHOLDS = {'now': 65, 'priority': 45, 'queue': 25}
 
@@ -1065,10 +1070,11 @@ class TestJournal(DBCase):
 
 
 class TestCountByGroup(DBCase):
-    def test_empty_db_six_zero_keys(self):
+    def test_empty_db_seven_zero_keys(self):
+        # v2: count_by_group возвращает 7 ключей — шесть групп + inbox (§6)
         c = db.count_by_group(self.conn)
-        self.assertEqual(set(c.keys()), set(GROUPS))
-        for g in GROUPS:
+        self.assertEqual(set(c.keys()), set(GROUPS_V2))
+        for g in GROUPS_V2:
             self.assertEqual(c[g], 0)
 
     def test_counts_open_only(self):
@@ -1081,7 +1087,8 @@ class TestCountByGroup(DBCase):
         db.delete_task(self.conn, e['id'], dt(hour=10))
         c = db.count_by_group(self.conn)
         self.assertEqual(c, {'now': 2, 'priority': 0, 'queue': 0,
-                             'delegate': 0, 'someday': 1, 'waiting': 0})
+                             'delegate': 0, 'someday': 1, 'waiting': 0,
+                             'inbox': 0})   # v2: ключ inbox присутствует всегда
 
     def test_counts_follow_move(self):
         t = self.make('A', group='now', score=70.0)

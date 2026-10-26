@@ -35,6 +35,7 @@ MONTH = '2026-11-24'
 DEFAULT_WEIGHTS = {'importance': 0.45, 'urgency': 0.30, 'consequence': 0.20, 'duration': 0.05}
 DEFAULT_THRESHOLDS = {'now': 65, 'priority': 45, 'queue': 25}
 GROUPS = ('now', 'priority', 'queue', 'delegate', 'someday', 'waiting')
+BOARD_GROUPS = GROUPS + ('inbox',)   # v2: /api/board и Task.group включают inbox (§7)
 
 # Поля объекта Task по §4 + days_left и hints (§7).
 TASK_FIELDS = {
@@ -43,6 +44,7 @@ TASK_FIELDS = {
     'group_since', 'evaluated_at', 'needs_review', 'review_reason', 'is_today',
     'today_date', 'carry_count', 'status', 'done_at', 'created_at', 'updated_at',
     'days_left', 'hints',
+    'project', 'project_name', 'project_color', 'evaluated',   # v2: §7 — проект и флаг мастера
 }
 
 
@@ -259,7 +261,7 @@ class ServerTestCase(unittest.TestCase):
         missing = TASK_FIELDS - set(task)
         self.assertFalse(missing, 'в Task нет полей: %s' % sorted(missing))
         self.assertNotIn('grp', task, 'поле grp должно быть переименовано в group')
-        self.assertIn(task['group'], GROUPS)
+        self.assertIn(task['group'], BOARD_GROUPS)   # v2: группа inbox допустима
         self.assertIsInstance(task['hints'], list)
         self.assertIsInstance(task['score'], (int, float))
         self.assertTrue(0 <= task['score'] <= 100)
@@ -326,6 +328,14 @@ class TestHealthI18nSettingsSecurity(ServerTestCase):
         self.assertEqual(s['carry_limit'], 3)
         self.assertEqual(s['language'], 'ru')
         self.assertIn('last_rollover', s)
+        # v2: §4.2 — новые ключи настроек и их умолчания
+        self.assertEqual(s['schema_version'], 2)
+        self.assertEqual(s['default_project'], 'praxis')
+        self.assertEqual(s['theme'], 'dark')
+        self.assertEqual(s['timezone'], 'Europe/Berlin')
+        self.assertEqual(s['calendar_urls'], [])
+        self.assertEqual(s['calendar_refresh_min'], 15)
+        self.assertIn('calendar_cache', s)
 
     def test_settings_put_day_limit(self):
         status, before = self.call('GET', '/api/settings')
@@ -800,7 +810,7 @@ class TestTasks(ServerTestCase):
         self.create_task('Доска delegate', answers(3, 'week', 'unpleasant', 'delegate', '30m', delegate_to='Мир'))
         status, data = self.call('GET', '/api/board')
         self.assertEqual(status, 200, data)
-        self.assertEqual(set(data['groups']), set(GROUPS))
+        self.assertEqual(set(data['groups']), set(BOARD_GROUPS))   # v2: 7 групп, включая inbox
         for g, body in data['groups'].items():
             with self.subTest(group=g):
                 self.assertIn('count', body)
@@ -815,7 +825,7 @@ class TestTasks(ServerTestCase):
         for sort in ('score', 'due', 'created'):
             status, d2 = self.call('GET', '/api/board?sort=%s' % sort)
             self.assertEqual(status, 200, d2)
-            self.assertEqual(set(d2['groups']), set(GROUPS))
+            self.assertEqual(set(d2['groups']), set(BOARD_GROUPS))   # v2
         scores = [t['score'] for t in data['groups']['now']['tasks']]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
