@@ -221,7 +221,7 @@ get_task(conn, task_id) -> Optional[dict]
 list_tasks(conn, group=None, who=None, duration=None, due=None, status='open', sort='score', needs_review=None) -> list
     # sort: 'score' (↓, затем due_date ↑, created_at ↑) | 'due' (due_date ↑, None в конце, затем score ↓) | 'created' (created_at ↓)
 update_task_fields(conn, task_id, fields: dict, now, event=None, old='', new='', note='') -> dict  # низкоуровневое: UPDATE + journal
-edit_task(conn, task_id, title=None, note=None, now) -> dict               # journal 'edit'
+edit_task(conn, task_id, title=None, note=None, now=None) -> dict          # journal 'edit' (только если что-то изменилось); now=None → datetime.now()
 apply_evaluation(conn, task_id, answers, evaluation, now) -> dict          # повторный мастер: все поля ответов, score, group, group_manual=0, carry_count=0, needs_review=0, evaluated_at; journal 'evaluate'
 move_task(conn, task_id, group, now) -> dict                               # ручной перенос: group_manual=1, group_since; если group != 'now' и is_today → снять с дня (journal today_remove, note 'moved'); journal 'manual_move'
 set_done(conn, task_id, now) -> dict / reopen_task(conn, task_id, now) -> dict / delete_task(conn, task_id, now) -> dict
@@ -295,6 +295,8 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | 7 | Повторный мастер сбрасывает счётчик переносов и ручную группу | иначе требование пройти вопросы повторялось бы бесконечно |
 | 8 | Удаление мягкое (`status=deleted`) | журнал и история не теряются |
 | 9 | Веса нормализуются по сумме | пользователь может вводить любые числа, балл остаётся 0..100 |
+| 10 | Повторное добавление задачи, уже стоящей в «Сегодня», — идемпотентно (200, без изменений и без записи в журнал) | защита от двойного клика |
+| 11 | Модифицирующие функции db бросают `db.NotFound` (KeyError) для несуществующей задачи; `get_task` → None | сервер превращает в 404 |
 
 ## 10. Открытые вопросы к владельцу (не блокируют v1, приняты допущения из §9)
 1. «На этой неделе» — в течение 7 дней (принято) или до воскресенья?
