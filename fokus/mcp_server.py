@@ -9,7 +9,7 @@
 
 Как работает: это тонкий клиент к HTTP API Fokus (http://127.0.0.1:4321, AGENTS.md §7).
 Если сервер Fokus не запущен — запускает `server.py` рядом с собой (можно запретить:
-FOKUS_MCP_AUTOSTART=0). Вся логика приоритетов остаётся в одном процессе server.py.
+FOKUS_MCP_AUTOSTART=0); вывод сервера — в data/server.log рядом с БД. Вся логика приоритетов остаётся в одном процессе server.py.
 
 Протокол: JSON-RPC 2.0, по одному сообщению в строке на stdin/stdout, UTF-8.
 В stdout — только JSON-RPC; служебные сообщения — в stderr.
@@ -101,10 +101,13 @@ class FokusClient(object):
         if not os.path.isfile(server_py):
             raise FokusUnavailable('не найден %s' % server_py)
         log('Fokus не запущен — запускаю %s' % server_py)
-        os.makedirs(os.path.join(HERE, 'data'), exist_ok=True)
-        logfile = open(os.path.join(HERE, 'data', 'server.log'), 'ab')
         env = dict(os.environ)
         env['FOKUS_PORT'] = str(self.port)
+        # лог сервера — рядом с его БД (data/server.log; при FOKUS_DB — рядом с указанным файлом)
+        db_path = env.get('FOKUS_DB', '').strip() or os.path.join(HERE, 'data', 'fokus.db')
+        log_dir = os.path.dirname(os.path.abspath(db_path))
+        os.makedirs(log_dir, exist_ok=True)
+        logfile = open(os.path.join(log_dir, 'server.log'), 'ab')
         # stdout сервера НЕ должен попасть в наш stdout (там только JSON-RPC)
         self.child = subprocess.Popen(
             [sys.executable, server_py], cwd=HERE, env=env,

@@ -11,3 +11,5 @@ fokus/data/*.db-*
 fokus/data/backups/
 __pycache__/
 *.pyc
+fokus/data/*.log
+fokus/data/*.pid
