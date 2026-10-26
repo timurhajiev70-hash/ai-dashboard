@@ -207,7 +207,7 @@ plan_rollover(tasks: list, today: date, settings: dict) -> dict
     #  'regroup': {task_id: (old, new)}, # пересчёт по датам, только для group_manual == 0 и group ∉ {delegate, waiting}
     #  'rescore': {task_id: new_score}}  # новые баллы для всех открытых задач
 ```
-Правила переноса (детали): задача, выбранная на день и не сделанная к следующему дню → `is_today=0`, `today_date=NULL`, `carry_count += 1`, журнал `carry`. Если `carry_count ≥ carry_limit` → `needs_review=1, review_reason='carried'`. Любая открытая задача с `evaluated_at` старше `stale_days` дней → `needs_review=1, review_reason='stale'` (если ещё не стоит). `needs_review` сбрасывается только повторным прохождением мастера (evaluate). Повторное прохождение мастера сбрасывает `carry_count=0`, `group_manual=0`, обновляет `evaluated_at`, `group_since` (если группа сменилась).
+Правила переноса (детали): задача, выбранная на день и не сделанная к следующему дню → `is_today=0`, `today_date=NULL`, `carry_count += 1`, журнал `carry`. Если `carry_count ≥ carry_limit` → `needs_review=1, review_reason='carried'`. Любая открытая задача, у которой `(today − date(evaluated_at)) ≥ stale_days` (ровно 7 дней — уже stale) → `needs_review=1, review_reason='stale'` (если `needs_review` ещё не стоит). Если в один rollover задача и перенесена в 3-й раз, и залежалась — причина `carried` (проверяется первой). `needs_review` сбрасывается только повторным прохождением мастера (evaluate). Повторное прохождение мастера сбрасывает `carry_count=0`, `group_manual=0`, обновляет `evaluated_at`, `group_since` (если группа сменилась).
 
 ## 6. Слой данных (db.py). Публичные функции
 ```python
@@ -297,6 +297,8 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | 9 | Веса нормализуются по сумме | пользователь может вводить любые числа, балл остаётся 0..100 |
 | 10 | Повторное добавление задачи, уже стоящей в «Сегодня», — идемпотентно (200, без изменений и без записи в журнал) | защита от двойного клика |
 | 11 | Модифицирующие функции db бросают `db.NotFound` (KeyError) для несуществующей задачи; `get_task` → None | сервер превращает в 404 |
+| 12 | `get_task` удалённой задачи возвращает dict со `status='deleted'`; `list_tasks` её не показывает ни при каком `status` | мягкое удаление |
+| 13 | `update_settings` атомарна: невалидный patch не применяется даже частично | предсказуемость |
 
 ## 10. Открытые вопросы к владельцу (не блокируют v1, приняты допущения из §9)
 1. «На этой неделе» — в течение 7 дней (принято) или до воскресенья?
