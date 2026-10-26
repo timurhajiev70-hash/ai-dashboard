@@ -619,7 +619,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
       inner.appendChild(ans);
     }
     const j = el('div', { class: 'block' }, el('h4', { text: t('detail_journal') }));
-    journal.forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); j.appendChild(el('div', { class: 'jrow' }, el('span', { text: fmtTs(e.ts) }), el('span', {}, el('b', { text: t('ev_' + e.event) }), ch ? ' ' + ch : ''))); });
+    journal.slice().reverse().forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); j.appendChild(el('div', { class: 'jrow' }, el('span', { text: fmtTs(e.ts) }), el('span', {}, el('b', { text: t('ev_' + e.event) }), ch ? ' ' + ch : ''))); });
     inner.appendChild(j);
     d.appendChild(inner);
   }
@@ -784,7 +784,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
     const tz = el('input', { type: 'text', value: s.timezone || 'Europe/Berlin' }); inputs.timezone = tz;
     const status = el('div', { class: 'muted small', style: { marginTop: '8px' } });
     const cache = s.calendar_cache;
-    status.textContent = (s.calendar_urls || []).length ? (cache && cache.fetched_at ? t('settings_calendar_status', { n: (cache.events || []).length, time: fmtTs(cache.fetched_at) }) : t('settings_calendar_none')) : t('settings_calendar_none');
+    status.textContent = (s.calendar_urls || []).length ? (cache && cache.fetched_at ? t('settings_calendar_status', { n: cache.events_count !== undefined ? cache.events_count : (cache.events || []).length, time: fmtTs(cache.fetched_at) }) + ((cache.errors || []).length ? ' · ' + t('calendar_error') : '') : t('settings_calendar_none')) : t('settings_calendar_none');
     const refreshBtn = el('button', { class: 'btn small', text: t('settings_calendar_check'), onclick: () => guarded(async () => {
       try { await saveSettings(); const r = await api('POST', '/api/calendar/refresh'); status.textContent = t('settings_calendar_status', { n: r.events_count, time: fmtTs(r.fetched_at) }) + ((r.errors || []).length ? ' · ' + t('calendar_error') : ''); toast(t('saved'), 'ok'); }
       catch (e) { showError(e); }
@@ -827,7 +827,7 @@ table.journal th { color: var(--muted); font-weight: 600; } table.journal th:fir
     main.appendChild(el('div', { class: 'row', style: { margin: '4px 0 18px' } }, el('button', { class: 'btn primary', text: t('btn_save'), onclick: () => guarded(async () => { try { await saveSettings(); toast(t('settings_saved'), 'ok'); await refreshSidebar(); await render(); } catch (e) { showError(e); } }) })));
     // журнал
     const table = el('table', { class: 'journal' }, el('thead', {}, el('tr', {}, el('th', { text: t('journal_ts') }), el('th', { text: t('journal_task') }), el('th', { text: t('journal_event') }), el('th', { text: t('journal_change') }))));
-    const tb = el('tbody'); (j.entries || []).forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); tb.appendChild(el('tr', {}, el('td', { text: fmtTs(e.ts) }), el('td', { text: e.title || ('#' + e.task_id) }), el('td', { text: t('ev_' + e.event) }), el('td', { text: ch }))); });
+    const tb = el('tbody'); (j.entries || []).slice().reverse().forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); tb.appendChild(el('tr', {}, el('td', { text: fmtTs(e.ts) }), el('td', { text: e.title || ('#' + e.task_id) }), el('td', { text: t('ev_' + e.event) }), el('td', { text: ch }))); });
     table.appendChild(tb);
     main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_journal') }), table));
     // приложение

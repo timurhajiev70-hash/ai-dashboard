@@ -11,7 +11,12 @@
   таблица маршрутов ``ROUTES`` (метод, regex → имя обработчика ``h_<имя>``);
 - ``make_app(conn, today_fn)`` / ``make_server(app, host, port)`` — сборка для запуска и для тестов;
 - один глобальный ``threading.Lock`` на все операции с БД (включая авто-rollover) — операции атомарны;
-- ``main()`` — бэкап → соединение → сервер; корректное завершение по Ctrl-C.
+- ``main()`` — бэкап → соединение → сервер; корректное завершение по Ctrl-C, SIGTERM или ``POST /api/shutdown``.
+
+v2 (§7, §12): проекты (``/api/projects``), «Входящие» (``POST /api/tasks`` без ``answers``, ``/api/inbox``),
+``/api/upcoming``, Google Календарь из кэша (``/api/calendar``; устаревший кэш обновляется в фоновом потоке —
+сеть вне Lock, запись под Lock; ``POST /api/calendar/refresh`` — синхронно через ``Deferred`` вне Lock),
+``POST /api/shutdown``. Модуль ``calendar_ics`` импортируется лениво: без него календарь отвечает ошибкой, сервер работает.
 
 Переменные окружения: ``FOKUS_PORT`` (4321), ``FOKUS_DB`` (``<папка server.py>/data/fokus.db``), ``FOKUS_TODAY``.
 """
@@ -25,7 +30,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -43,7 +48,7 @@ __all__ = [
     'today', 'enrich', 'make_app', 'make_handler', 'make_server', 'main',
 ]
 
-VERSION = '1.0'
+VERSION = '1.0'               # §7: /api/health отдаёт version "1.0" (в v2 спецификация значение не меняла)
 HOST = '127.0.0.1'
 DEFAULT_PORT = 4321
 MAX_BODY = 64 * 1024          # §7: тело запроса ≤ 64 КБ, иначе 413
@@ -55,6 +60,17 @@ JOURNAL_MAX_LIMIT = 1000
 STATUS_FILTERS = ('open', 'done', 'all')
 SORTS = ('score', 'due', 'created')
 FLAG_VALUES = ('1', '0', 'true', 'false')
+ALL_GROUPS = engine.GROUPS + (engine.INBOX,)   # v2: фильтр group= и доска включают «Входящие»
+UPCOMING_DEFAULT_DAYS = 7
+UPCOMING_MAX_DAYS = 31
+CALENDAR_DEFAULT_SPAN = 7     # GET /api/calendar без from/to: сегодня..+7
+CALENDAR_MAX_SPAN = 62        # дней между from и to
+CALENDAR_FETCH_TIMEOUT = 10.0  # §7: таймаут загрузки каждого .ics
+CALENDAR_RETRY_SECONDS = 60.0  # фоновое обновление — не чаще раза в минуту (защита от «дёргания» при сбоях сети)
+CALENDAR_DAYS_BACK = 7
+CALENDAR_DAYS_FORWARD = 60
+SHUTDOWN_DELAY = 0.5          # §7: /api/shutdown — ответ, затем остановка через 0.5 с
+_URL_RE = re.compile(r'https?://\S+')  # для вычищения секретных адресов из сообщений об ошибках
 
 JSON_HEADERS = [
     ('Content-Type', 'application/json; charset=utf-8'),
@@ -90,6 +106,16 @@ ROUTES = [
     ('GET', r'^/api/review$', 'review'),
     ('GET', r'^/api/journal$', 'journal'),
     ('POST', r'^/api/rollover$', 'rollover_post'),
+    # ---- v2
+    ('GET', r'^/api/inbox$', 'inbox'),
+    ('GET', r'^/api/upcoming$', 'upcoming'),
+    ('GET', r'^/api/projects$', 'projects_list'),
+    ('POST', r'^/api/projects$', 'projects_create'),
+    ('PATCH', r'^/api/projects/(?P<pid>[^/]+)$', 'project_patch'),
+    ('DELETE', r'^/api/projects/(?P<pid>[^/]+)$', 'project_delete'),
+    ('GET', r'^/api/calendar$', 'calendar_get'),
+    ('POST', r'^/api/calendar/refresh$', 'calendar_refresh'),
+    ('POST', r'^/api/shutdown$', 'shutdown'),
 ]
 
 
@@ -234,12 +260,60 @@ def _task_answers(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def enrich(task: Dict[str, Any], day: date) -> Dict[str, Any]:
-    """Объект Task для API: строка БД + days_left + hints (§7)."""
+def enrich(task: Dict[str, Any], day: date, projects: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Объект Task для API: строка БД + days_left + hints + project_name/project_color/evaluated (§7).
+
+    projects — {slug: project} (включая архивные); без него имя = slug, цвет = умолчание.
+    """
     out = dict(task)
     out['days_left'] = engine.days_left(task.get('due_date'), day)
-    out['hints'] = engine.hints_for(_task_answers(task), task.get('group'))
+    if task.get('group') == engine.INBOX:
+        out['hints'] = []  # ответы-заглушки подсказок не дают
+    else:
+        out['hints'] = engine.hints_for(_task_answers(task), task.get('group'))
+    slug = task.get('project') or db.DEFAULT_PROJECT
+    out['project'] = slug
+    project = (projects or {}).get(slug) or {}
+    if not out.get('project_name'):  # db.list_tasks/get_task уже отдают имя и цвет (LEFT JOIN projects)
+        out['project_name'] = project.get('name') or slug
+    if not out.get('project_color'):
+        out['project_color'] = project.get('color') or db.PROJECT_COLOR_DEFAULT
+    out['evaluated'] = 0 if task.get('evaluated') in (0, False, '0') else 1
     return out
+
+
+def _redact(text: Any) -> str:
+    """Секретные адреса календаря — пароль; в сообщениях об ошибках заменяются на <url>."""
+    return _URL_RE.sub('<url>', '' if text is None else str(text))
+
+
+def _events_between(events: List[Dict[str, Any]], start: date, end: date) -> List[Dict[str, Any]]:
+    """События кэша (Event §7: start/end — 'YYYY-MM-DD' или 'YYYY-MM-DDTHH:MM', end исключительный),
+    пересекающие [start, end). Сравнение строк корректно: префикс — дата ISO. Сортировка по start."""
+    lo = start.isoformat()
+    hi = end.isoformat()
+    out = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        s = str(ev.get('start') or '')
+        e = str(ev.get('end') or s)
+        if not s:
+            continue
+        if e <= s:  # событие нулевой длины: считаем, что занимает момент начала
+            e = s + '\x7f'
+        if s < hi and e > lo:
+            out.append(ev)
+    out.sort(key=lambda ev: (str(ev.get('start') or ''), str(ev.get('summary') or '')))
+    return out
+
+
+class Deferred(object):
+    """Результат обработчика, который надо завершить ВНЕ глобального Lock (сеть), см. App.handle.
+    fn() -> (status, payload); внутри fn сам берёт app.lock на запись результата."""
+
+    def __init__(self, fn: Any) -> None:
+        self.fn = fn
 
 
 # --------------------------------------------------------------------------- запрос
@@ -298,6 +372,11 @@ class App(object):
         self.log_stream = log_stream  # None → sys.stderr на момент записи
         self.lock = threading.Lock()
         self.routes = [(m, re.compile(rx), name) for m, rx, name in ROUTES]
+        # ---- v2
+        self.server = None             # type: Optional[ThreadingHTTPServer]  # ставит make_server; нужен для /api/shutdown
+        self.shutdown_hook = None      # type: Any  # альтернатива server.shutdown() (тесты)
+        self._cal_thread = None        # type: Optional[threading.Thread]  # не больше одного фонового обновления
+        self._cal_last_attempt = 0.0   # monotonic: когда последний раз начинали обновление календаря
 
     # ------------------------------------------------------------------ вход/выход
 
@@ -313,6 +392,8 @@ class App(object):
             try:
                 with self.lock:
                     status, payload = self.handle_api(method, path, parts.query, headers, body_bytes)
+                if isinstance(payload, Deferred):
+                    status, payload = payload.fn()  # сеть — вне Lock (POST /api/calendar/refresh)
             except ApiError as e:
                 status, payload = e.status, e.payload()
             except db.NotFound:
@@ -454,13 +535,54 @@ class App(object):
             raise _not_found('задача удалена')
         return task
 
-    def _tasks(self, tasks: List[Dict[str, Any]], day: date) -> List[Dict[str, Any]]:
-        return [enrich(t, day) for t in tasks]
+    def _projects_map(self) -> Dict[str, Dict[str, Any]]:
+        """{slug: project} по всем проектам, включая архивные (для имён/цветов в Task)."""
+        return dict((p['id'], p) for p in db.list_projects(self.conn, include_archived=True))
+
+    def _tasks(self, tasks: List[Dict[str, Any]], day: date,
+               projects: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        if projects is None:
+            projects = self._projects_map()
+        return [enrich(t, day, projects) for t in tasks]
+
+    def _task(self, task: Dict[str, Any], day: date) -> Dict[str, Any]:
+        return enrich(task, day, self._projects_map())
 
     def _today_payload(self, day: date, settings: Dict[str, Any]) -> Dict[str, Any]:
         tasks = db.today_tasks(self.conn, day)
         limit = self._limit(settings)
         return {'tasks': self._tasks(tasks, day), 'free_slots': max(0, limit - len(tasks))}
+
+    def _project_param(self, req: Request) -> Optional[str]:
+        """?project=slug — существующий проект (архивный допустим); иначе 400 validation project."""
+        raw = req.param('project')
+        if raw is None:
+            return None
+        if not db.PROJECT_ID_RE.match(raw) or db.get_project(self.conn, raw) is None:
+            raise _validation('project', 'проект не найден')
+        return raw
+
+    def _project_or_404(self, project_id: str) -> Dict[str, Any]:
+        project = db.get_project(self.conn, project_id) if db.PROJECT_ID_RE.match(project_id or '') else None
+        if project is None:
+            raise _not_found('проект не найден')
+        return project
+
+    @staticmethod
+    def _public_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Настройки для API: calendar_cache заменяется сводкой (список событий отдаёт /api/calendar)."""
+        out = dict(settings)
+        cache = out.get('calendar_cache')
+        if isinstance(cache, dict):
+            out['calendar_cache'] = {
+                'fetched_at': cache.get('fetched_at'),
+                'events_count': len(cache.get('events') or []),
+                'errors': cache.get('errors') or [],
+                'window': cache.get('window'),
+            }
+        else:
+            out['calendar_cache'] = None
+        return out
 
     def _evaluate(self, raw_answers: Any, day: date, settings: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -482,36 +604,68 @@ class App(object):
         return {'lang': lang, 'strings': i18n.get_strings(lang)}
 
     def h_settings_get(self, req: Request, m: Any) -> Dict[str, Any]:
-        return self._settings()
+        return self._public_settings(self._settings())
 
     def h_settings_put(self, req: Request, m: Any) -> Dict[str, Any]:
         patch = dict(req.json_object())
-        patch.pop('last_rollover', None)  # служебное поле, извне не меняется
+        for key in ('last_rollover', 'schema_version', 'calendar_cache'):
+            patch.pop(key, None)  # служебные поля, извне не меняются
+        before = self._settings()
         try:
-            return db.update_settings(self.conn, patch)
+            result = db.update_settings(self.conn, patch)
         except ValueError as e:
             raise _validation(str(e) or 'settings')
+        if result.get('calendar_urls') != before.get('calendar_urls') or result.get('timezone') != before.get('timezone'):
+            db.calendar_cache_set(self.conn, None)  # события старых адресов/зоны не показывать; следующий запрос обновит
+            self._cal_last_attempt = 0.0
+        return self._public_settings(result)
 
     def h_tasks_list(self, req: Request, m: Any) -> Dict[str, Any]:
-        group = req.choice('group', engine.GROUPS)
+        group = req.choice('group', ALL_GROUPS)
         who = req.choice('who', engine.WHO_VALUES)
         duration = req.choice('duration', engine.DURATION_VALUES)
         due = req.choice('due', engine.DUE_VALUES)
         status = req.choice('status', STATUS_FILTERS, 'open')
         sort = req.choice('sort', SORTS, 'score')
         needs_review = req.choice('needs_review', FLAG_VALUES)
+        project = self._project_param(req)
         tasks = db.list_tasks(self.conn, group=group, who=who, duration=duration, due=due,
-                              status=status, sort=sort, needs_review=needs_review)
+                              status=status, sort=sort, needs_review=needs_review, project=project)
         return {'tasks': self._tasks(tasks, req.day)}
+
+    def _project_for_create(self, body: Dict[str, Any], raw_title: str) -> Tuple[str, Optional[str]]:
+        """(название без #тега, slug проекта или None=умолчание). #Проект в тексте сильнее поля project (§7)."""
+        active = db.list_projects(self.conn)  # только неархивные
+        parsed = engine.parse_quick_add(raw_title, [{'id': p['id'], 'name': p['name']} for p in active])
+        title = _clean_title(parsed['title'])
+        project = parsed['project']  # type: Optional[str]
+        if project is None and body.get('project') is not None:
+            raw = body.get('project')
+            if not isinstance(raw, str) or not db.PROJECT_ID_RE.match(raw.strip()):
+                raise _validation('project', 'ожидается slug проекта')
+            found = db.get_project(self.conn, raw.strip())
+            if found is None or found.get('archived'):
+                raise _validation('project', 'проект не найден или в архиве')
+            project = found['id']
+        return title, project
 
     def h_tasks_create(self, req: Request, m: Any) -> Tuple[int, Dict[str, Any]]:
         body = req.json_object()
-        title = _clean_title(body.get('title'))
+        raw_title = _clean_title(body.get('title'))
         note = _clean_note(body.get('note'))
-        settings = self._settings()
-        evaluation = self._evaluate(body.get('answers'), req.day, settings)
-        task = db.create_task(self.conn, title, note, evaluation['answers'], evaluation, _now_for(req.day))
-        return 201, {'task': enrich(task, req.day), 'hints': evaluation['hints']}
+        title, project = self._project_for_create(body, raw_title)
+        now = _now_for(req.day)
+        try:
+            if body.get('answers') is None:  # v2: без мастера → «Входящие»
+                task = db.create_task(self.conn, title, note, None, None, now, project=project)
+                hints = []  # type: List[str]
+            else:
+                evaluation = self._evaluate(body.get('answers'), req.day, self._settings())
+                task = db.create_task(self.conn, title, note, evaluation['answers'], evaluation, now, project=project)
+                hints = evaluation['hints']
+        except ValueError as e:
+            raise _validation(str(e) or 'task')
+        return 201, {'task': self._task(task, req.day), 'hints': hints}
 
     def h_tasks_preview(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
@@ -525,22 +679,32 @@ class App(object):
 
     def h_task_get(self, req: Request, m: Any) -> Dict[str, Any]:
         task = self._task_or_404(int(m.group('id')))
-        return {'task': enrich(task, req.day)}
+        return {'task': self._task(task, req.day)}
 
     def h_task_patch(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
         task_id = int(m.group('id'))
-        self._live_task_or_404(task_id)
+        task = self._live_task_or_404(task_id)
         title = _clean_title(body['title']) if body.get('title') is not None else None
         note = _clean_note(body['note']) if body.get('note') is not None else None
-        task = db.edit_task(self.conn, task_id, title=title, note=note, now=_now_for(req.day))
-        return {'task': enrich(task, req.day)}
+        now = _now_for(req.day)
+        if title is not None or note is not None:
+            task = db.edit_task(self.conn, task_id, title=title, note=note, now=now)
+        if body.get('project') is not None:  # v2: смена проекта → журнал project_change
+            raw = body.get('project')
+            if not isinstance(raw, str) or not db.PROJECT_ID_RE.match(raw.strip()):
+                raise _validation('project', 'ожидается slug проекта')
+            try:
+                task = db.set_project(self.conn, task_id, raw.strip(), now)
+            except ValueError:
+                raise _validation('project', 'проект не найден или в архиве')
+        return {'task': self._task(task, req.day)}
 
     def h_task_delete(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
         self._live_task_or_404(task_id)
         task = db.delete_task(self.conn, task_id, _now_for(req.day))
-        return {'task': enrich(task, req.day)}
+        return {'task': self._task(task, req.day)}
 
     def h_task_evaluate(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
@@ -548,7 +712,7 @@ class App(object):
         self._live_task_or_404(task_id)
         evaluation = self._evaluate(body.get('answers'), req.day, self._settings())
         task = db.apply_evaluation(self.conn, task_id, evaluation['answers'], evaluation, _now_for(req.day))
-        return {'task': enrich(task, req.day), 'hints': evaluation['hints']}
+        return {'task': self._task(task, req.day), 'hints': evaluation['hints']}
 
     def h_task_move(self, req: Request, m: Any) -> Dict[str, Any]:
         body = req.json_object()
@@ -556,23 +720,28 @@ class App(object):
         if not isinstance(group, str) or group.strip() not in engine.GROUPS:
             raise _validation('group', 'неизвестная группа')
         task_id = int(m.group('id'))
-        self._live_task_or_404(task_id)
-        task = db.move_task(self.conn, task_id, group.strip(), _now_for(req.day))
-        return {'task': enrich(task, req.day)}
+        task = self._live_task_or_404(task_id)
+        if task.get('group') == engine.INBOX:
+            raise _validation('group', 'задачу из «Входящих» нельзя перенести вручную — сначала пройдите мастер')
+        try:
+            task = db.move_task(self.conn, task_id, group.strip(), _now_for(req.day))
+        except ValueError:
+            raise _validation('group', 'неизвестная группа')
+        return {'task': self._task(task, req.day)}
 
     def h_task_done(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
         task = self._live_task_or_404(task_id)
         if task.get('status') != 'done':  # повторный клик — идемпотентно, без второй записи в журнал
             task = db.set_done(self.conn, task_id, _now_for(req.day))
-        return {'task': enrich(task, req.day)}
+        return {'task': self._task(task, req.day)}
 
     def h_task_reopen(self, req: Request, m: Any) -> Dict[str, Any]:
         task_id = int(m.group('id'))
         task = self._live_task_or_404(task_id)
         if task.get('status') != 'open':
             task = db.reopen_task(self.conn, task_id, _now_for(req.day))
-        return {'task': enrich(task, req.day)}
+        return {'task': self._task(task, req.day)}
 
     def h_today_get(self, req: Request, m: Any) -> Dict[str, Any]:
         settings = self._settings()
@@ -583,13 +752,17 @@ class App(object):
         # pool — все открытые задачи 🔴 вне дня в том же порядке, что и кандидаты
         # (нужен, когда день полный: пользователь выбирает, на что заменить одну из трёх)
         ordered_pool = engine.suggest_today(pool, [], max(len(pool), 1))
+        projects = self._projects_map()
+        calendar = self._calendar_view(settings, req.day, req.day + timedelta(days=1))
         return {
             'date': req.day.isoformat(),
             'limit': limit,
-            'tasks': self._tasks(tasks, req.day),
-            'candidates': self._tasks(candidates, req.day),
-            'pool': self._tasks(ordered_pool, req.day),
+            'tasks': self._tasks(tasks, req.day, projects),
+            'candidates': self._tasks(candidates, req.day, projects),
+            'pool': self._tasks(ordered_pool, req.day, projects),
             'free_slots': max(0, limit - len(tasks)),
+            'events': calendar['events'],
+            'calendar': calendar['status'],
         }
 
     def h_today_add(self, req: Request, m: Any) -> Dict[str, Any]:
@@ -629,12 +802,311 @@ class App(object):
 
     def h_board(self, req: Request, m: Any) -> Dict[str, Any]:
         sort = req.choice('sort', SORTS, 'score')
+        project = self._project_param(req)
+        projects = self._projects_map()
         groups = {}  # type: Dict[str, Any]
-        for group in engine.GROUPS:
-            tasks = db.list_tasks(self.conn, group=group, status='open', sort=sort)
-            groups[group] = {'count': len(tasks), 'tasks': self._tasks(tasks, req.day)}
-        review = db.list_tasks(self.conn, status='open', sort=sort, needs_review=1)
-        return {'groups': groups, 'review': self._tasks(review, req.day)}
+        for group in ALL_GROUPS:  # 6 групп + inbox
+            tasks = db.list_tasks(self.conn, group=group, status='open', sort=sort, project=project)
+            groups[group] = {'count': len(tasks), 'tasks': self._tasks(tasks, req.day, projects)}
+        review = db.list_tasks(self.conn, status='open', sort=sort, needs_review=1, project=project)
+        return {
+            'groups': groups,
+            'review': self._tasks(review, req.day, projects),
+            'projects': db.list_projects(self.conn),
+            'project': project,
+        }
+
+    # ------------------------------------------------------------------ v2: «Входящие», предстоящие, проекты
+
+    def h_inbox(self, req: Request, m: Any) -> Dict[str, Any]:
+        project = self._project_param(req)
+        tasks = db.list_tasks(self.conn, group=engine.INBOX, status='open', sort='created', project=project)
+        return {'tasks': self._tasks(tasks, req.day)}
+
+    def h_upcoming(self, req: Request, m: Any) -> Dict[str, Any]:
+        if 'days' in req.query and req.param('days') is None:
+            raise _validation('days', 'days: 1..%d' % UPCOMING_MAX_DAYS)  # ?days= (пусто) — не умолчание, а ошибка
+        days = _int_param(req.param('days'), 'days', 1, UPCOMING_MAX_DAYS, UPCOMING_DEFAULT_DAYS)
+        project = self._project_param(req)
+        start = req.day
+        end = start + timedelta(days=days)
+        projects = self._projects_map()
+        settings = self._settings()
+        calendar = self._calendar_view(settings, start, end)
+        open_tasks = db.list_tasks(self.conn, status='open', sort='due', project=project)
+        by_day = {}  # type: Dict[str, List[Dict[str, Any]]]
+        overdue = []  # type: List[Dict[str, Any]]
+        for task in open_tasks:
+            if task.get('group') == engine.INBOX or not task.get('due_date'):
+                continue
+            due = engine.parse_date(task['due_date'])
+            if due is None:
+                continue
+            if due < start:
+                overdue.append(task)
+            elif due < end:
+                by_day.setdefault(due.isoformat(), []).append(task)
+        day_items = []
+        for i in range(days):
+            day = start + timedelta(days=i)
+            key = day.isoformat()
+            day_items.append({
+                'date': key,
+                'weekday': day.isoweekday(),  # 1 = понедельник … 7 = воскресенье
+                'tasks': self._tasks(by_day.get(key, []), req.day, projects),
+                'events': _events_between(calendar['events'], day, day + timedelta(days=1)),
+            })
+        return {
+            'from': start.isoformat(),
+            'to': (end - timedelta(days=1)).isoformat(),
+            'days': day_items,
+            'overdue': self._tasks(overdue, req.day, projects),
+            'calendar': calendar['status'],
+        }
+
+    def h_projects_list(self, req: Request, m: Any) -> Dict[str, Any]:
+        archived = req.choice('archived', FLAG_VALUES)
+        include = archived in ('1', 'true')
+        return {'projects': db.list_projects(self.conn, include_archived=include)}
+
+    def h_projects_create(self, req: Request, m: Any) -> Tuple[int, Dict[str, Any]]:
+        body = req.json_object()
+        try:
+            project = db.create_project(self.conn, body.get('name'), body.get('color'), _now_for(req.day),
+                                        project_id=body.get('id') if isinstance(body.get('id'), str) else None)
+        except ValueError as e:
+            raise _validation(str(e) or 'project')
+        return 201, {'project': project}
+
+    def h_project_patch(self, req: Request, m: Any) -> Dict[str, Any]:
+        body = req.json_object()
+        project = self._project_or_404(m.group('pid'))
+        fields = {}  # type: Dict[str, Any]
+        for key in ('name', 'color', 'sort', 'archived'):
+            if body.get(key) is not None:
+                fields[key] = body[key]
+        try:
+            updated = db.update_project(self.conn, project['id'], now=_now_for(req.day), **fields)
+        except ValueError as e:
+            code = str(e) or 'project'
+            message = 'проект Praxis нельзя архивировать' if code == 'archived' and project['id'] == db.DEFAULT_PROJECT else None
+            raise _validation(code, message)
+        except db.NotFound:
+            raise _not_found('проект не найден')
+        return {'project': updated}
+
+    def h_project_delete(self, req: Request, m: Any) -> Dict[str, Any]:
+        project = self._project_or_404(m.group('pid'))
+        try:
+            db.delete_project(self.conn, project['id'])
+        except ValueError as e:
+            if str(e) == 'not_empty':
+                raise ApiError(409, 'not_empty', 'в проекте есть задачи — сначала перенесите или удалите их',
+                               open_count=project.get('open_count', 0))
+            raise _validation('id', 'проект Praxis удалить нельзя')
+        except db.NotFound:
+            raise _not_found('проект не найден')
+        return {'ok': True}
+
+    # ------------------------------------------------------------------ v2: Google Календарь (§12)
+
+    @staticmethod
+    def _calendar_module() -> Any:
+        """calendar_ics импортируется лениво: модуль пишется отдельно, его отсутствие — не падение сервера."""
+        try:
+            import calendar_ics  # noqa: WPS433
+        except ImportError:
+            return None
+        return calendar_ics
+
+    @staticmethod
+    def _cache_age_minutes(cache: Optional[Dict[str, Any]]) -> Optional[float]:
+        """Возраст кэша в минутах по fetched_at (ISO локального времени); None, если кэша нет/дата битая."""
+        if not isinstance(cache, dict):
+            return None
+        raw = cache.get('fetched_at')
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        try:
+            fetched = datetime.fromisoformat(raw.strip().replace('Z', '+00:00'))
+        except ValueError:
+            return None
+        if fetched.tzinfo is not None:
+            fetched = fetched.astimezone().replace(tzinfo=None)
+        return max(0.0, (datetime.now() - fetched).total_seconds() / 60.0)
+
+    @staticmethod
+    def _calendar_error_text(cache: Optional[Dict[str, Any]], total: int) -> Optional[str]:
+        errors = (cache or {}).get('errors') or []
+        if not errors:
+            return None
+        parts = []
+        for err in errors[:3]:
+            if isinstance(err, dict):
+                idx = err.get('url_index')
+                prefix = ('адрес %d: ' % (int(idx) + 1)) if isinstance(idx, int) and idx >= 0 else ''
+                parts.append(prefix + _redact(err.get('message') or 'ошибка'))
+            else:
+                parts.append(_redact(err))
+        head = 'не загрузились %d из %d адресов' % (min(len(errors), total), total) if total else 'ошибка загрузки'
+        return head + ': ' + '; '.join(parts)
+
+    def _calendar_view(self, settings: Dict[str, Any], start: date, end: date) -> Dict[str, Any]:
+        """События кэша в [start, end) + статус {configured, fetched_at, error}; при устаревшем кэше
+        запускает фоновое обновление (ответ не ждёт сети). Вызывается под Lock."""
+        urls = [u for u in (settings.get('calendar_urls') or []) if isinstance(u, str) and u.strip()]
+        configured = bool(urls)
+        cache = db.calendar_cache_get(self.conn)
+        status = {'configured': configured, 'fetched_at': None, 'error': None}  # type: Dict[str, Any]
+        if not configured:
+            return {'events': [], 'status': status}
+        module = self._calendar_module()
+        if module is None:
+            status['error'] = 'calendar_ics не найден'
+            return {'events': [], 'status': status}
+        if cache is not None:
+            status['fetched_at'] = cache.get('fetched_at')
+            status['error'] = self._calendar_error_text(cache, len(urls))
+        if self._calendar_stale(settings, cache):
+            self._start_calendar_refresh(urls, settings, start)
+        status['refreshing'] = self._cal_thread is not None and self._cal_thread.is_alive()
+        if cache is None:
+            return {'events': [], 'status': status}
+        return {'events': _events_between(cache.get('events') or [], start, end), 'status': status}
+
+    def _calendar_stale(self, settings: Dict[str, Any], cache: Optional[Dict[str, Any]]) -> bool:
+        try:
+            refresh_min = float(settings.get('calendar_refresh_min') or engine.DEFAULT_SETTINGS['calendar_refresh_min'])
+        except (TypeError, ValueError):
+            refresh_min = float(engine.DEFAULT_SETTINGS['calendar_refresh_min'])
+        age = self._cache_age_minutes(cache)
+        return age is None or age >= refresh_min
+
+    def _start_calendar_refresh(self, urls: List[str], settings: Dict[str, Any], day: date) -> bool:
+        """Фоновое обновление: не больше одного потока одновременно и не чаще CALENDAR_RETRY_SECONDS.
+        Вызывается под Lock (флаги защищены им)."""
+        if self._cal_thread is not None and self._cal_thread.is_alive():
+            return False
+        if time.monotonic() - self._cal_last_attempt < CALENDAR_RETRY_SECONDS:
+            return False
+        self._cal_last_attempt = time.monotonic()
+        tz = str(settings.get('timezone') or engine.DEFAULT_SETTINGS['timezone'])
+        thread = threading.Thread(target=self._calendar_worker, args=(list(urls), tz, day),
+                                  name='fokus-calendar', daemon=True)
+        self._cal_thread = thread
+        thread.start()
+        return True
+
+    def _fetch_calendar(self, urls: List[str], tz: str, day: date) -> Dict[str, Any]:
+        """Сеть: calendar_ics.refresh по всем адресам. БЕЗ Lock. Исключений не бросает."""
+        module = self._calendar_module()
+        if module is None:
+            return {'events': None, 'fetched_at': None,
+                    'errors': [{'url_index': -1, 'message': 'calendar_ics не найден'}]}
+        try:
+            result = module.refresh(urls, day, tz, days_back=CALENDAR_DAYS_BACK, days_forward=CALENDAR_DAYS_FORWARD)
+        except Exception as e:  # noqa: BLE001 — любой сбой модуля: кэш не трогаем, ошибку показываем
+            return {'events': None, 'fetched_at': None,
+                    'errors': [{'url_index': -1, 'message': _redact('%s: %s' % (type(e).__name__, e))}]}
+        if not isinstance(result, dict):
+            return {'events': None, 'fetched_at': None,
+                    'errors': [{'url_index': -1, 'message': 'calendar_ics.refresh вернул не dict'}]}
+        events = result.get('events')
+        errors = []
+        for err in result.get('errors') or []:
+            if isinstance(err, dict):
+                errors.append({'url_index': err.get('url_index'), 'message': _redact(err.get('message'))})
+            else:
+                errors.append({'url_index': -1, 'message': _redact(err)})
+        return {
+            'events': events if isinstance(events, list) else [],
+            'fetched_at': result.get('fetched_at') or datetime.now().isoformat(timespec='seconds'),
+            'errors': errors,
+            'window': result.get('window'),
+        }
+
+    def _store_calendar(self, result: Dict[str, Any], urls: List[str]) -> Dict[str, Any]:
+        """Запись результата в кэш — ПОД Lock. Если адреса за время загрузки изменились — результат
+        отбрасывается. Если не загрузился ни один адрес, прежние события сохраняются (ошибка — в errors)."""
+        current = [u for u in (db.get_settings(self.conn).get('calendar_urls') or []) if isinstance(u, str)]
+        if current != list(urls):
+            return db.calendar_cache_get(self.conn) or {'events': [], 'fetched_at': None, 'errors': []}
+        previous = db.calendar_cache_get(self.conn)
+        all_failed = result.get('events') is None or (urls and len(result.get('errors') or []) >= len(urls))
+        if all_failed and previous is not None:
+            previous = dict(previous)
+            previous['errors'] = result.get('errors') or []
+            previous['failed_at'] = datetime.now().isoformat(timespec='seconds')
+            db.calendar_cache_set(self.conn, previous)
+            return previous
+        payload = {
+            'events': result.get('events') or [],
+            'fetched_at': result.get('fetched_at') or datetime.now().isoformat(timespec='seconds'),
+            'errors': result.get('errors') or [],
+            'window': result.get('window'),
+            'urls_count': len(urls),
+        }
+        db.calendar_cache_set(self.conn, payload)
+        return payload
+
+    def _calendar_worker(self, urls: List[str], tz: str, day: date) -> None:
+        try:
+            result = self._fetch_calendar(urls, tz, day)
+            with self.lock:
+                self._store_calendar(result, urls)
+        except Exception as e:  # noqa: BLE001 — фоновый поток не должен падать (и печатать трейсбек с адресами)
+            sys.stderr.write('календарь: фоновое обновление не удалось: %s\n' % _redact(e))
+
+    def h_calendar_get(self, req: Request, m: Any) -> Dict[str, Any]:
+        start = _parse_day(req.param('from'), 'from') if req.param('from') is not None else req.day
+        end_incl = _parse_day(req.param('to'), 'to') if req.param('to') is not None else start + timedelta(days=CALENDAR_DEFAULT_SPAN)
+        if end_incl < start:
+            raise _validation('to', 'to раньше from')
+        if (end_incl - start).days > CALENDAR_MAX_SPAN:
+            raise _validation('to', 'диапазон не больше %d дней' % CALENDAR_MAX_SPAN)
+        view = self._calendar_view(self._settings(), start, end_incl + timedelta(days=1))
+        payload = {'from': start.isoformat(), 'to': end_incl.isoformat(), 'events': view['events']}
+        payload.update(view['status'])
+        return payload
+
+    def h_calendar_refresh(self, req: Request, m: Any) -> Deferred:
+        settings = self._settings()
+        urls = [u for u in (settings.get('calendar_urls') or []) if isinstance(u, str) and u.strip()]
+        if not urls:
+            raise ApiError(400, 'not_configured', 'адреса календаря не заданы (Настройки → Google Календарь)')
+        if self._calendar_module() is None:
+            raise ApiError(500, 'internal', 'модуль calendar_ics не найден')
+        tz = str(settings.get('timezone') or engine.DEFAULT_SETTINGS['timezone'])
+        day = req.day
+        self._cal_last_attempt = time.monotonic()
+
+        def finish() -> Tuple[int, Dict[str, Any]]:
+            result = self._fetch_calendar(urls, tz, day)  # сеть — вне Lock
+            with self.lock:
+                stored = self._store_calendar(result, urls)
+            return 200, {
+                'events_count': len(stored.get('events') or []),
+                'fetched_at': stored.get('fetched_at'),
+                'errors': result.get('errors') or [],
+            }
+
+        return Deferred(finish)
+
+    # ------------------------------------------------------------------ v2: выключение
+
+    def _shutdown_later(self) -> None:
+        time.sleep(SHUTDOWN_DELAY)
+        try:
+            if self.shutdown_hook is not None:
+                self.shutdown_hook()
+            elif self.server is not None:
+                self.server.shutdown()  # из другого потока: serve_forever() завершится, main() закроет БД
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write('shutdown: %s\n' % e)
+
+    def h_shutdown(self, req: Request, m: Any) -> Dict[str, Any]:
+        threading.Thread(target=self._shutdown_later, name='fokus-shutdown', daemon=True).start()
+        return {'ok': True}
 
     def h_review(self, req: Request, m: Any) -> Dict[str, Any]:
         sort = req.choice('sort', SORTS, 'score')
@@ -769,6 +1241,7 @@ def make_server(app: App, host: str = HOST, port: int = DEFAULT_PORT) -> Threadi
     server = ThreadingHTTPServer((host, port), make_handler(app))
     server.daemon_threads = True
     app.port = server.server_address[1]
+    app.server = server  # для POST /api/shutdown (server.shutdown() из отдельного потока)
     return server
 
 
@@ -832,6 +1305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         pass  # не главный поток или платформа без SIGTERM — завершение штатное, по Ctrl-C
     try:
         server.serve_forever()
+        _log_line('остановка (POST /api/shutdown)')  # serve_forever() вернулся штатно — только после server.shutdown()
     except KeyboardInterrupt:
         _log_line('остановка (Ctrl-C / SIGTERM)')
     finally:

@@ -21,6 +21,7 @@ FOKUS_MCP_AUTOSTART=0); вывод сервера — в data/server.log ряд�
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -38,6 +39,7 @@ DEFAULT_PROTOCOL = '2025-06-18'
 GROUP_LABEL = {
     'now': '🔴 Очень важно', 'priority': '🟠 Приоритет', 'queue': '🔵 Очередь',
     'delegate': '⚪ Поручить', 'someday': '⚫ Отложено / может быть', 'waiting': '⏸ Ждёт',
+    'inbox': '📥 Входящие (без мастера)',
 }
 HINT_LABEL = {
     'do_now': '⚡ ≤ 5 минут и важно — сделай сразу',
@@ -174,7 +176,11 @@ ANSWER_PROPERTIES = {
     'depends_on': {'type': 'string', 'description': 'От чего зависит (текст); пусто — не зависит'},
 }
 ANSWER_REQUIRED = ['importance', 'due', 'consequence', 'who', 'duration']
-GROUP_ENUM = ['now', 'priority', 'queue', 'delegate', 'someday', 'waiting']
+MOVE_GROUP_ENUM = ['now', 'priority', 'queue', 'delegate', 'someday', 'waiting']   # ручной перенос: без inbox
+GROUP_ENUM = MOVE_GROUP_ENUM + ['inbox']                                          # фильтры/доска: с «Входящими»
+DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+PROJECT_ARG = {'type': 'string', 'minLength': 1, 'maxLength': 40,
+               'description': 'Проект: slug (praxis, privat, projekt, …) или имя без учёта регистра'}
 
 
 def _answers_schema(required: bool) -> dict:
@@ -183,8 +189,12 @@ def _answers_schema(required: bool) -> dict:
 
 
 def _task_line(t: dict) -> str:
-    parts = ['#%s' % t.get('id'), '«%s»' % t.get('title', ''), GROUP_LABEL.get(t.get('group'), t.get('group')),
-             '%.1f' % float(t.get('score') or 0)]
+    parts = ['#%s' % t.get('id'), '«%s»' % t.get('title', ''), GROUP_LABEL.get(t.get('group'), t.get('group'))]
+    if t.get('group') != 'inbox':
+        parts.append('%.1f' % float(t.get('score') or 0))
+    project_name = t.get('project_name') or t.get('project')
+    if project_name:
+        parts.append('📁 %s' % project_name)
     dl = t.get('days_left')
     if dl is None:
         parts.append('без срока')
@@ -245,27 +255,59 @@ class Tools(object):
             {'name': 'fokus_add_task',
              'description': 'Добавить задачу через мастер из 6 вопросов (важность, срок, последствия, кто, длительность, '
                             'зависимость). Перед вызовом задай пользователю эти вопросы. Пациенты — только номер tomedo, без имён. '
-                            'Возвращает группу, балл и подсказки; add_to_today=true — сразу поставить в «Сегодня» (только если группа 🔴 и есть место).',
+                            'Возвращает группу, балл и подсказки; add_to_today=true — сразу поставить в «Сегодня» (только если группа 🔴 и есть место). '
+                            'quick=true — быстро записать во «Входящие» без вопросов (answers не нужны; оценить позже через fokus_reevaluate). '
+                            'project — проект (slug или имя); #Проект в названии тоже распознаётся.',
              'inputSchema': {'type': 'object',
-                             'properties': {'title': {'type': 'string', 'minLength': 1, 'maxLength': 200, 'description': 'Короткое название'},
+                             'properties': {'title': {'type': 'string', 'minLength': 1, 'maxLength': 200, 'description': 'Короткое название (можно с #Проект)'},
                                             'note': {'type': 'string', 'maxLength': 2000, 'description': 'Заметка (необязательно)'},
                                             'answers': _answers_schema(True),
+                                            'project': PROJECT_ARG,
+                                            'quick': {'type': 'boolean', 'description': 'true — во «Входящие» без мастера (answers не передавать)'},
                                             'add_to_today': {'type': 'boolean', 'description': 'Сразу поставить в «Сегодня», если можно'}},
-                             'required': ['title', 'answers'], 'additionalProperties': False}},
+                             'required': ['title'], 'additionalProperties': False}},
             {'name': 'fokus_board',
-             'description': 'Доска групп: количество задач в каждой из 6 групп и сами задачи, плюс список задач, требующих переоценки.',
+             'description': 'Доска групп: количество задач в каждой из 6 групп и во «Входящих», сами задачи, список задач, '
+                            'требующих переоценки, и проекты. project — показать только один проект.',
              'inputSchema': {'type': 'object', 'properties': {'sort': {'type': 'string', 'enum': ['score', 'due', 'created'],
-                                                                      'description': 'Сортировка внутри групп'}},
+                                                                      'description': 'Сортировка внутри групп'},
+                                                              'project': PROJECT_ARG},
                              'additionalProperties': False}},
             {'name': 'fokus_list_tasks',
-             'description': 'Список задач с фильтрами: группа, срок, кто делает, длительность, статус (open/done/all), needs_review.',
+             'description': 'Список задач с фильтрами: группа (включая inbox), проект, срок, кто делает, длительность, статус (open/done/all), needs_review.',
              'inputSchema': {'type': 'object',
                              'properties': {'group': {'type': 'string', 'enum': GROUP_ENUM},
+                                            'project': PROJECT_ARG,
                                             'due': ANSWER_PROPERTIES['due'], 'who': ANSWER_PROPERTIES['who'],
                                             'duration': ANSWER_PROPERTIES['duration'],
                                             'status': {'type': 'string', 'enum': ['open', 'done', 'all'], 'description': 'по умолчанию open'},
                                             'needs_review': {'type': 'boolean', 'description': 'только задачи, которым нужна переоценка'},
                                             'sort': {'type': 'string', 'enum': ['score', 'due', 'created']}},
+                             'additionalProperties': False}},
+            {'name': 'fokus_inbox',
+             'description': '«Входящие»: задачи, записанные быстро без мастера (evaluated=0). Их надо оценить через fokus_reevaluate, '
+                            'прежде чем они попадут в группу или в «Сегодня».',
+             'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+            {'name': 'fokus_projects',
+             'description': 'Проекты (Praxis, Privat, Projekt и свои): slug, имя, цвет, число открытых задач. archived=true — вместе с архивными.',
+             'inputSchema': {'type': 'object', 'properties': {'archived': {'type': 'boolean', 'description': 'показать и архивные'}},
+                             'additionalProperties': False}},
+            {'name': 'fokus_set_project',
+             'description': 'Перенести задачу в другой проект (slug или имя). Журнал: project_change.',
+             'inputSchema': {'type': 'object', 'properties': {'task_id': task_id, 'project': PROJECT_ARG},
+                             'required': ['task_id', 'project'], 'additionalProperties': False}},
+            {'name': 'fokus_calendar',
+             'description': 'События Google Календаря (только чтение, из кэша Fokus) на дату или диапазон: date=YYYY-MM-DD (один день) '
+                            'или from/to (до 62 дней); без параметров — сегодня..+7. Если календарь не подключён — configured=false.',
+             'inputSchema': {'type': 'object',
+                             'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD — один день'},
+                                            'from': {'type': 'string', 'description': 'YYYY-MM-DD — начало диапазона'},
+                                            'to': {'type': 'string', 'description': 'YYYY-MM-DD — конец диапазона (включительно)'}},
+                             'additionalProperties': False}},
+            {'name': 'fokus_upcoming',
+             'description': 'Предстоящие: просроченные задачи и по дням на days вперёд (1..31, по умолчанию 7) — задачи по сроку и события календаря.',
+             'inputSchema': {'type': 'object', 'properties': {'days': {'type': 'integer', 'minimum': 1, 'maximum': 31},
+                                                              'project': PROJECT_ARG},
                              'additionalProperties': False}},
             {'name': 'fokus_get_task',
              'description': 'Одна задача по id со всеми полями.',
@@ -287,7 +329,7 @@ class Tools(object):
              'inputSchema': {'type': 'object', 'properties': {'task_id': task_id}, 'required': ['task_id'], 'additionalProperties': False}},
             {'name': 'fokus_move',
              'description': 'Перенести задачу в другую группу вручную (пометка «вручную»; авто-пересчёт её больше не трогает).',
-             'inputSchema': {'type': 'object', 'properties': {'task_id': task_id, 'group': {'type': 'string', 'enum': GROUP_ENUM}},
+             'inputSchema': {'type': 'object', 'properties': {'task_id': task_id, 'group': {'type': 'string', 'enum': MOVE_GROUP_ENUM}},
                              'required': ['task_id', 'group'], 'additionalProperties': False}},
             {'name': 'fokus_reevaluate',
              'description': 'Пройти 6 вопросов заново для существующей задачи (после 3 переносов или 7+ дней). Сбрасывает счётчик переносов.',
@@ -311,11 +353,16 @@ class Tools(object):
                                                               'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000}},
                              'additionalProperties': False}},
             {'name': 'fokus_settings',
-             'description': 'Настройки Fokus: веса вопросов, пороги групп, лимит задач в день, язык.',
+             'description': 'Настройки Fokus: веса вопросов, пороги групп, лимит задач в день, язык, тема, проект по умолчанию, '
+                            'часовой пояс, календарь (адреса iCal, период обновления).',
              'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
         ]
 
-    ANNOTATIONS = {'fokus_today': ('Сегодня', {'readOnlyHint': True}), 'fokus_preview': ('Итог мастера (без сохранения)', {'readOnlyHint': True}), 'fokus_add_task': ('Добавить задачу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_board': ('Доска групп', {'readOnlyHint': True}), 'fokus_list_tasks': ('Список задач', {'readOnlyHint': True}), 'fokus_get_task': ('Задача', {'readOnlyHint': True}), 'fokus_done': ('Готово', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reopen': ('Вернуть', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_add': ('В «Сегодня»', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_remove': ('Убрать из дня', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_move': ('Перенести в группу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reevaluate': ('Пройти вопросы заново', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_edit': ('Изменить название', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_delete': ('Удалить', {'readOnlyHint': False, 'destructiveHint': True, 'idempotentHint': True}), 'fokus_review': ('Нужна переоценка', {'readOnlyHint': True}), 'fokus_journal': ('Журнал', {'readOnlyHint': True}), 'fokus_settings': ('Настройки', {'readOnlyHint': True})}
+    ANNOTATIONS = {'fokus_today': ('Сегодня', {'readOnlyHint': True}), 'fokus_preview': ('Итог мастера (без сохранения)', {'readOnlyHint': True}), 'fokus_add_task': ('Добавить задачу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_board': ('Доска групп', {'readOnlyHint': True}), 'fokus_list_tasks': ('Список задач', {'readOnlyHint': True}), 'fokus_get_task': ('Задача', {'readOnlyHint': True}), 'fokus_done': ('Готово', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reopen': ('Вернуть', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_add': ('В «Сегодня»', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_today_remove': ('Убрать из дня', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_move': ('Перенести в группу', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_reevaluate': ('Пройти вопросы заново', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False}), 'fokus_edit': ('Изменить название', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}), 'fokus_delete': ('Удалить', {'readOnlyHint': False, 'destructiveHint': True, 'idempotentHint': True}), 'fokus_review': ('Нужна переоценка', {'readOnlyHint': True}), 'fokus_journal': ('Журнал', {'readOnlyHint': True}), 'fokus_settings': ('Настройки', {'readOnlyHint': True}),
+                   # ---- v2
+                   'fokus_inbox': ('Входящие', {'readOnlyHint': True}), 'fokus_projects': ('Проекты', {'readOnlyHint': True}),
+                   'fokus_set_project': ('Перенести в проект', {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}),
+                   'fokus_calendar': ('Календарь', {'readOnlyHint': True}), 'fokus_upcoming': ('Предстоящие', {'readOnlyHint': True})}
 
     def definitions_annotated(self) -> List[dict]:
         out = []
@@ -411,13 +458,51 @@ class Tools(object):
             text += ' · ' + hints
         return text, d, False
 
+    # ---- проекты (v2): slug или имя → slug через /api/projects
+    def _projects(self, include_archived: bool = False) -> List[dict]:
+        status, d = self._api('GET', '/api/projects' + ('?archived=1' if include_archived else ''))
+        if status != 200 or not isinstance(d, dict):
+            raise FokusUnavailable('не удалось получить список проектов (HTTP %s)' % status)
+        return list(d.get('projects') or [])
+
+    def _resolve_project(self, args: dict, key: str = 'project', required: bool = False) -> Optional[str]:
+        """Параметр project (slug или имя, без учёта регистра) → slug существующего проекта. ValueError, если не найден."""
+        raw = args.get(key)
+        if raw is None:
+            if required:
+                raise ValueError('%s: обязательный параметр (slug или имя проекта)' % key)
+            return None
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError('%s: строка — slug или имя проекта' % key)
+        wanted = raw.strip().casefold()
+        projects = self._projects(include_archived=True)
+        for p in projects:  # сначала точный slug, затем имя
+            if str(p.get('id', '')).casefold() == wanted:
+                return p['id']
+        for p in projects:
+            if str(p.get('name', '')).casefold() == wanted:
+                return p['id']
+        known = ', '.join('%s (%s)' % (p.get('id'), p.get('name')) for p in projects if not p.get('archived'))
+        raise ValueError('%s: проект «%s» не найден. Есть: %s' % (key, raw.strip(), known or '—'))
+
     def tool_add_task(self, args: dict) -> Tuple[str, Any, bool]:
-        body = {'title': args.get('title'), 'note': args.get('note') or '', 'answers': args.get('answers') or {}}
+        quick = bool(args.get('quick'))
+        answers = args.get('answers')
+        if not quick and not isinstance(answers, dict):
+            raise ValueError('answers: нужны ответы на 6 вопросов — или quick: true, чтобы записать во «Входящие» без мастера')
+        body = {'title': args.get('title'), 'note': args.get('note') or ''}  # type: Dict[str, Any]
+        if not quick:
+            body['answers'] = answers
+        project = self._resolve_project(args)
+        if project:
+            body['project'] = project
         status, d = self._api('POST', '/api/tasks', body)
         if status != 201:
             return self._error(status, d)
         task = d['task']
-        text = 'Добавлено: %s' % _task_line(task)
+        text = ('Записано во «Входящие»: %s' if task.get('group') == 'inbox' else 'Добавлено: %s') % _task_line(task)
+        if task.get('group') == 'inbox':
+            text += '\nОценить позже: fokus_reevaluate с ответами на 6 вопросов.'
         hints = _hints_text(d.get('hints'), task)
         if hints:
             text += '\nПодсказки: ' + hints
@@ -438,10 +523,16 @@ class Tools(object):
 
     def tool_board(self, args: dict) -> Tuple[str, Any, bool]:
         sort = self._enum(args, 'sort', ['score', 'due', 'created']) or 'score'
-        status, d = self._api('GET', '/api/board?' + urllib.parse.urlencode({'sort': sort}))
+        params = [('sort', sort)]
+        project = self._resolve_project(args)
+        if project:
+            params.append(('project', project))
+        status, d = self._api('GET', '/api/board?' + urllib.parse.urlencode(params))
         if status != 200:
             return self._error(status, d)
         lines = []
+        if project:
+            lines.append('Проект: %s' % project)
         for g in GROUP_ENUM:
             grp = d['groups'].get(g) or {'count': 0, 'tasks': []}
             lines.append('%s — %d' % (GROUP_LABEL[g], grp['count']))
@@ -449,6 +540,9 @@ class Tools(object):
         if d.get('review'):
             lines.append('Нужна переоценка: %d' % len(d['review']))
             lines += ['  ' + _task_line(t) for t in d['review']]
+        if d.get('projects'):
+            lines.append('Проекты: ' + ', '.join('%s (%s) — %s' % (p.get('name'), p.get('id'), p.get('open_count', 0))
+                                                 for p in d['projects']))
         return '\n'.join(lines), d, False
 
     def tool_list_tasks(self, args: dict) -> Tuple[str, Any, bool]:
@@ -459,6 +553,9 @@ class Tools(object):
             value = self._enum(args, key, allowed)
             if value:
                 params.append((key, value))
+        project = self._resolve_project(args)
+        if project:
+            params.append(('project', project))
         if args.get('needs_review'):
             params.append(('needs_review', '1'))
         status, d = self._api('GET', '/api/tasks' + ('?' + urllib.parse.urlencode(params) if params else ''))
@@ -573,7 +670,120 @@ class Tools(object):
         status, d = self._api('GET', '/api/settings')
         if status != 200:
             return self._error(status, d)
-        return json.dumps(d, ensure_ascii=False, indent=1), d, False
+        shown = dict(d) if isinstance(d, dict) else d
+        if isinstance(shown, dict) and shown.get('calendar_urls'):
+            # секретные адреса — пароль к календарю: модели показываем только их число
+            shown['calendar_urls'] = ['<скрыто: %d адрес(ов)>' % len(shown['calendar_urls'])]
+        return json.dumps(shown, ensure_ascii=False, indent=1), shown, False
+
+    # ---- v2: «Входящие», проекты, календарь, предстоящие
+
+    def tool_inbox(self, args: dict) -> Tuple[str, Any, bool]:
+        status, d = self._api('GET', '/api/inbox')
+        if status != 200:
+            return self._error(status, d)
+        if not d['tasks']:
+            return 'Входящие пусты.', d, False
+        lines = ['Входящие (%d) — оценить через fokus_reevaluate:' % len(d['tasks'])]
+        lines += ['  ' + _task_line(t) for t in d['tasks']]
+        return '\n'.join(lines), d, False
+
+    def tool_projects(self, args: dict) -> Tuple[str, Any, bool]:
+        include = bool(args.get('archived'))
+        status, d = self._api('GET', '/api/projects' + ('?archived=1' if include else ''))
+        if status != 200:
+            return self._error(status, d)
+        lines = []
+        for p in d.get('projects') or []:
+            line = '%s — slug %s, цвет %s, открытых задач: %s' % (p.get('name'), p.get('id'), p.get('color'), p.get('open_count', 0))
+            if p.get('archived'):
+                line += ' (в архиве)'
+            lines.append(line)
+        return '\n'.join(lines) if lines else 'Проектов нет.', d, False
+
+    def tool_set_project(self, args: dict) -> Tuple[str, Any, bool]:
+        project = self._resolve_project(args, required=True)
+        return self._simple('PATCH', '/api/tasks/%d' % self._tid(args), 'Проект изменён: ', {'project': project})
+
+    @staticmethod
+    def _date_arg(args: dict, key: str) -> Optional[str]:
+        value = args.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not DATE_RE.match(value.strip()):
+            raise ValueError('%s: ожидается дата YYYY-MM-DD' % key)
+        return value.strip()
+
+    @staticmethod
+    def _event_line(e: dict) -> str:
+        start = str(e.get('start') or '')
+        end = str(e.get('end') or '')
+        if e.get('all_day'):
+            when = start + (' — %s' % end if end and end != start else '') + ' (весь день)'
+        else:
+            when = start.replace('T', ' ')
+            if end and end[:10] == start[:10]:
+                when += '–' + end[11:16]
+            elif end:
+                when += ' — ' + end.replace('T', ' ')
+        line = '%s  %s' % (when, e.get('summary') or '(без названия)')
+        if e.get('location'):
+            line += ' · %s' % e['location']
+        return line
+
+    def tool_calendar(self, args: dict) -> Tuple[str, Any, bool]:
+        one_day = self._date_arg(args, 'date')
+        params = []
+        if one_day:
+            params = [('from', one_day), ('to', one_day)]
+        else:
+            start = self._date_arg(args, 'from')
+            end = self._date_arg(args, 'to')
+            if start:
+                params.append(('from', start))
+            if end:
+                params.append(('to', end))
+        status, d = self._api('GET', '/api/calendar' + ('?' + urllib.parse.urlencode(params) if params else ''))
+        if status != 200:
+            return self._error(status, d)
+        if not d.get('configured'):
+            return 'Календарь не подключён: в Настройках Fokus → Google Календарь вставьте секретный адрес iCal.', d, False
+        lines = ['Календарь %s — %s: %d событий' % (d.get('from'), d.get('to'), len(d.get('events') or []))]
+        if d.get('error'):
+            lines.append('⚠ ' + str(d['error']))
+        if d.get('fetched_at'):
+            lines.append('обновлено: %s' % str(d['fetched_at'])[:16].replace('T', ' '))
+        lines += ['  ' + self._event_line(e) for e in d.get('events') or []]
+        return '\n'.join(lines), d, False
+
+    def tool_upcoming(self, args: dict) -> Tuple[str, Any, bool]:
+        params = []
+        if args.get('days') is not None:
+            params.append(('days', str(self._int_arg(args, 'days', 1, 31, 'целое 1..31'))))
+        project = self._resolve_project(args)
+        if project:
+            params.append(('project', project))
+        status, d = self._api('GET', '/api/upcoming' + ('?' + urllib.parse.urlencode(params) if params else ''))
+        if status != 200:
+            return self._error(status, d)
+        lines = ['Предстоящие с %s по %s' % (d.get('from'), d.get('to'))]
+        if d.get('overdue'):
+            lines.append('Просрочено (%d):' % len(d['overdue']))
+            lines += ['  ' + _task_line(t) for t in d['overdue']]
+        for day in d.get('days') or []:
+            tasks = day.get('tasks') or []
+            events = day.get('events') or []
+            if not tasks and not events:
+                continue
+            lines.append('%s (день недели %s):' % (day.get('date'), day.get('weekday')))
+            lines += ['  🗓 ' + self._event_line(e) for e in events]
+            lines += ['  ' + _task_line(t) for t in tasks]
+        if len(lines) == 1:
+            lines.append('Ни задач по сроку, ни событий.')
+        cal = d.get('calendar') or {}
+        if cal.get('error'):
+            lines.append('⚠ календарь: %s' % cal['error'])
+        return '\n'.join(lines), d, False
 
 
 PROMPTS = [
@@ -700,7 +910,9 @@ class McpServer(object):
                 'serverInfo': {'name': SERVER_NAME, 'version': VERSION},
                 'instructions': ('Fokus — личный дневник задач с приоритетами. Каждая задача проходит 6 вопросов '
                                  '(fokus_add_task), в день не больше 3 задач (fokus_today). Пациенты — только номер tomedo. '
-                                 'Перед добавлением задай вопросы пользователю и покажи итог через fokus_preview.'),
+                                 'Перед добавлением задай вопросы пользователю и покажи итог через fokus_preview. '
+                                 'Быстрая запись без вопросов — fokus_add_task с quick=true (во «Входящие», fokus_inbox); '
+                                 'проекты — fokus_projects (Praxis, Privat, Projekt); календарь — fokus_calendar, fokus_upcoming.'),
             }
         if method == 'notifications/initialized':
             self.initialized = True

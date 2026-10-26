@@ -8,16 +8,17 @@
 """
 import copy
 import math
+import re
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 
 __all__ = [
-    'DEFAULT_SETTINGS', 'GROUPS', 'DUE_VALUES', 'CONSEQUENCE_VALUES', 'WHO_VALUES',
+    'DEFAULT_SETTINGS', 'GROUPS', 'INBOX', 'INBOX_ANSWERS', 'DUE_VALUES', 'CONSEQUENCE_VALUES', 'WHO_VALUES',
     'DURATION_VALUES', 'REVIEW_REASONS', 'validate_answers', 'due_date_for', 'days_left',
     'urgency_points', 'importance_points', 'consequence_points', 'duration_points',
     'compute_score', 'assign_group', 'hints_for', 'evaluate', 'rescore',
     'suggest_today', 'can_add_today', 'plan_rollover', 'merge_settings',
-    'parse_date', 'parse_datetime',
+    'parse_date', 'parse_datetime', 'parse_quick_add',
 ]
 
 DEFAULT_SETTINGS = {
@@ -28,9 +29,20 @@ DEFAULT_SETTINGS = {
     'carry_limit': 3,
     'language': 'ru',
     'last_rollover': None,
+    # ---- v2 (§4.2)
+    'schema_version': 2,
+    'default_project': 'praxis',
+    'theme': 'dark',
+    'timezone': 'Europe/Berlin',
+    'calendar_urls': [],
+    'calendar_refresh_min': 15,
+    'calendar_cache': None,
 }
 
 GROUPS = ('now', 'priority', 'queue', 'delegate', 'someday', 'waiting')
+INBOX = 'inbox'  # v2: «Входящие» — не группа матрицы; в GROUPS не входит, в балле/переносах не участвует
+INBOX_ANSWERS = {'importance': 3, 'due': 'none', 'consequence': 'none', 'who': 'me',
+                 'delegate_to': '', 'duration': '30m', 'depends_on': ''}
 DUE_VALUES = ('today', 'tomorrow', 'week', 'month', 'none')
 CONSEQUENCE_VALUES = ('none', 'unpleasant', 'serious')
 WHO_VALUES = ('me', 'delegate')
@@ -344,12 +356,14 @@ def _candidate_key(task: dict):
 
 
 def suggest_today(candidates: List[dict], today_tasks: List[dict], limit: int) -> List[dict]:
-    """Первые (limit − len(today_tasks)) кандидатов по score↓, due_date↑ (None в конце), created_at↑."""
+    """Первые (limit − len(today_tasks)) кандидатов по score↓, due_date↑ (None в конце), created_at↑.
+    v2: берутся только задачи group == 'now' (кандидат без поля group считается из now)."""
     free = int(limit) - len(today_tasks)
     if free <= 0:
         return []
     today_ids = set(t.get('id') for t in today_tasks)
-    pool = [t for t in candidates if t.get('id') not in today_ids]
+    pool = [t for t in candidates
+            if t.get('id') not in today_ids and t.get('group', 'now') == 'now']
     pool.sort(key=_candidate_key)
     return pool[:free]
 
@@ -372,6 +386,8 @@ def plan_rollover(tasks: List[dict], today: date, settings: Optional[dict] = Non
     plan = {'carry': [], 'review': {}, 'regroup': {}, 'rescore': {}, 'clear': []}
 
     for task in tasks:
+        if task.get('group') == INBOX:
+            continue  # v2: «Входящие» не участвуют ни в переносе, ни в переоценке, ни в пересчёте
         status = task.get('status', 'open')
         if status == 'done':
             done_day = parse_date(task.get('today_date'))
@@ -409,3 +425,55 @@ def plan_rollover(tasks: List[dict], today: date, settings: Optional[dict] = Non
                 plan['regroup'][tid] = (old_group, result['group'])
 
     return plan
+
+
+# ---------------------------------------------------------------- быстрое добавление (v2)
+
+_TAG_RE = re.compile(r'(?<!\S)#(\S+)')
+_TAG_TRAIL = '.,;:!?)»"\''
+
+
+def _project_lookup(projects: Optional[List[dict]]) -> Dict[str, str]:
+    """casefold(name|id) → id. Первый проект в списке выигрывает при совпадении имён."""
+    table = {}  # type: Dict[str, str]
+    for p in projects or []:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get('id')
+        if not isinstance(pid, str) or not pid:
+            continue
+        for key in (pid, p.get('name')):
+            if isinstance(key, str) and key.strip():
+                table.setdefault(key.strip().casefold(), pid)
+    return table
+
+
+def parse_quick_add(text: str, projects: Optional[List[dict]]) -> dict:
+    """«Позвонить в налоговую #Praxis» → {'title': 'Позвонить в налоговую', 'project': 'praxis'}.
+
+    #слово сравнивается без учёта регистра с name и id проектов (projects = [{'id','name'}, ...]).
+    Берётся первый известный тег и удаляется из названия; неизвестные теги остаются в тексте,
+    project=None, если известных нет. Хвостовая пунктуация после тега («#Praxis,») не мешает
+    распознаванию и сохраняется. Лишние пробелы схлопываются.
+    """
+    source = '' if text is None else str(text)
+    table = _project_lookup(projects)
+    project = None  # type: Optional[str]
+    result = source
+    if table:
+        for m in _TAG_RE.finditer(source):
+            raw = m.group(1)
+            tag = raw.rstrip(_TAG_TRAIL)
+            if not tag:
+                continue
+            pid = table.get(tag.casefold())
+            if pid is None:
+                continue
+            project = pid
+            cut_end = m.start(1) + len(tag)  # удаляем «#тег», пунктуацию после него оставляем
+            result = source[:m.start()] + ' ' + source[cut_end:]
+            break
+    title = re.sub(r'\s+', ' ', result).strip()
+    if project is not None:
+        title = re.sub(r'\s+([.,;:!?)»])', r'\1', title)  # «Позвонить , срочно» → «Позвонить, срочно»
+    return {'title': title, 'project': project}

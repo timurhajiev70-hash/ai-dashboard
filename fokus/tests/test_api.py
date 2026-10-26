@@ -513,10 +513,12 @@ class TestTasks(ServerTestCase):
                 self.assertEqual(status, 400, (name, data))
                 self.assertError(data, 'validation', field)
 
-    def test_create_without_answers_400(self):
+    def test_create_without_answers_goes_to_inbox(self):
+        # v2 (§7): без answers задача попадает во «Входящие», а не 400
         status, data = self.call('POST', '/api/tasks', {'title': 'без ответов'})
-        self.assertEqual(status, 400, data)
-        self.assertError(data, 'validation')
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data['task']['group'], 'inbox')
+        self.assertEqual(data['task']['evaluated'], 0)
 
     def test_create_bad_json(self):
         status, data = self.call('POST', '/api/tasks', raw='{title: нет кавычек')
