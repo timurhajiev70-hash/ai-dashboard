@@ -1,5 +1,7 @@
 # Fokus — личный дневник задач с приоритетами. Архитектура и решения
 
+Версия 2 (интерфейс в стиле Todoist, проекты, Google Календарь, Fokus.app). Разделы §12–§14 — новое; §1–§11 обновлены по месту.
+
 Версия 1. Этот файл — единственный источник правды для всех исполнителей (код, тесты, ревью, red team).
 Если код расходится с этим файлом — ошибка в коде, либо решение должно быть сначала записано сюда.
 
@@ -34,7 +36,10 @@ fokus/
   engine.py            — чистые функции: балл, группа, подсказки, топ-3, перенос (блок B)
   i18n.py              — строки интерфейса RU/DE, отдаются как /api/i18n (блок E)
   mcp_server.py        — MCP-сервер (stdio) для Claude Desktop / Claude Code / агента «Мир» (§11)
-  static/index.html    — интерфейс, 5 экранов (блок D)
+  calendar_ics.py      — Google Календарь по секретному iCal-адресу: загрузка, разбор, развёртка повторов (§12)
+  static/index.html    — интерфейс в стиле Todoist: боковая панель + список (§8, v2)
+  Fokus.app/           — macOS-приложение (bundle): Contents/MacOS/Fokus (bash), Info.plist, Resources/Fokus.icns (§13)
+  tools/make_icon.py   — генератор иконки (PNG → ICNS) на чистом Python
   data/fokus.db, data/backups/   — данные (в .gitignore)
   tests/test_engine.py, test_db.py, test_api.py, test_reference.py, test_i18n.py, test_launcher.py, test_mcp.py — unittest, запуск: python3 -m unittest discover -s tests
 ```
@@ -48,7 +53,8 @@ fokus/
 | `who` (вопрос 4) | `me`, `delegate`; при `delegate` поле `delegate_to` — свободный текст (напр. «Света», «Мир», «другой»), может быть пустым |
 | `duration` (вопрос 5) | `5m`, `30m`, `2h`, `half_day` |
 | `depends_on` (вопрос 6) | текст; пустая строка/`null` = не зависит |
-| `group` | `now` 🔴, `priority` 🟠, `queue` 🔵, `delegate` ⚪, `someday` ⚫, `waiting` ⏸ |
+| `group` | `now` 🔴, `priority` 🟠, `queue` 🔵, `delegate` ⚪, `someday` ⚫, `waiting` ⏸; плюс `inbox` 📥 — задача добавлена быстро, без мастера (`evaluated=0`), в балле/переносах не участвует |
+| `project` | slug проекта `[a-z0-9_-]{1,32}`; по умолчанию три: `praxis` (Praxis — дела по праксису), `privat` (Privat), `projekt` (Projekt); пользователь может добавлять свои |
 | `status` | `open`, `done`, `deleted` (мягкое удаление) |
 
 ## 4. Модель данных (SQLite)
@@ -78,8 +84,23 @@ CREATE TABLE tasks (
   status        TEXT NOT NULL DEFAULT 'open',
   done_at       TEXT,
   created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
+  updated_at    TEXT NOT NULL,
+  project       TEXT NOT NULL DEFAULT 'praxis' REFERENCES projects(id),   -- v2
+  evaluated     INTEGER NOT NULL DEFAULT 1                                -- v2: 0 = во «Входящих», мастер не пройден
 );
+CREATE TABLE projects (                      -- v2
+  id         TEXT PRIMARY KEY,               -- slug
+  name       TEXT NOT NULL,                  -- 1..40 символов
+  color      TEXT NOT NULL DEFAULT '#8b8b8b',-- #rrggbb
+  sort       INTEGER NOT NULL DEFAULT 0,
+  archived   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+-- Умолчания: ('praxis','Praxis','#14b8a6',0), ('privat','Privat','#22c55e',1), ('projekt','Projekt','#a855f7',2).
+-- Миграция v1 → v2 (db.migrate): settings.schema_version отсутствует/1 → ALTER TABLE tasks ADD COLUMN project/evaluated,
+-- CREATE TABLE projects + умолчания, schema_version=2. Выполняется в connect() до любых запросов, идемпотентна.
+-- Задачи во «Входящих»: grp='inbox', evaluated=0, ответы — заглушки (importance 3, due 'none', consequence 'none',
+-- who 'me', duration '30m', depends_on ''), score 0.0, due_date NULL.
 CREATE TABLE journal (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id   INTEGER NOT NULL REFERENCES tasks(id),
@@ -106,6 +127,8 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- value = J
 | `done` / `reopen` | status → status | |
 | `edit` | старый title → новый | изменение названия/заметки |
 | `delete` | status → `deleted` | |
+| `project_change` | slug → slug | задача перенесена в другой проект |
+| `create` для «Входящих» | '' → `inbox` | быстрое добавление без мастера; первый `evaluate` переводит из inbox в группу |
 
 ### 4.2 Настройки (таблица settings, ключ → JSON) и значения по умолчанию
 ```json
@@ -116,9 +139,17 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- value = J
   "stale_days": 7,
   "carry_limit": 3,
   "language":   "ru",
-  "last_rollover": null
+  "last_rollover": null,
+  "schema_version": 2,
+  "default_project": "praxis",
+  "theme": "dark",
+  "timezone": "Europe/Berlin",
+  "calendar_urls": [],
+  "calendar_refresh_min": 15,
+  "calendar_cache": null
 }
 ```
+v2: `theme` ∈ {dark, light}; `timezone` — имя IANA (проверяется через `zoneinfo`); `calendar_urls` — список строк `https://…` (до 10, каждая ≤ 2048 символов; Google отдаёт `https://calendar.google.com/calendar/ical/…/private-…/basic.ics`); `calendar_refresh_min` 5..1440; `default_project` — существующий неархивный проект. `calendar_cache` и `schema_version` — служебные, через PUT не меняются.
 Валидация при PUT: веса 0..1000 и сумма > 0 (нормализуются движком); `100 ≥ thresholds.now > priority > queue > 0`; `day_limit` 1..10; `stale_days` 1..90; `carry_limit` 1..10; `language` ∈ {ru, de}. Иначе 400. `last_rollover` — служебное поле: через API не меняется (игнорируется в PUT).
 
 ## 5. Движок приоритета (engine.py, чистые функции, без БД)
@@ -201,6 +232,12 @@ suggest_today(candidates: list, today_tasks: list, limit: int) -> list
     # кандидаты = открытые задачи группы now, не в «Сегодня»; сортировка: score ↓, due_date ↑ (None в конце), created_at ↑; 
     # возвращает первые (limit − len(today_tasks)) задач, [] если мест нет
 can_add_today(today_tasks: list, limit: int) -> bool
+# ---- v2
+INBOX = 'inbox'; INBOX_ANSWERS = {'importance': 3, 'due': 'none', 'consequence': 'none', 'who': 'me', 'delegate_to': '', 'duration': '30m', 'depends_on': ''}
+parse_quick_add(text: str, projects: list) -> dict
+    # «Позвонить в налоговую #Praxis» → {'title': 'Позвонить в налоговую', 'project': 'praxis'}; projects = [{'id','name'}, ...];
+    # #слово сравнивается без учёта регистра с name и id; неизвестный #тег остаётся в названии, project=None; лишние пробелы схлопываются
+# plan_rollover: задачи group=='inbox' пропускаются целиком (ни carry, ни review, ни rescore); suggest_today берёт только group=='now'
 plan_rollover(tasks: list, today: date, settings: dict) -> dict
     # чистая функция: по списку открытых задач (dict как в API) решает, что делать при наступлении нового дня:
     # {'carry': [task_id...],           # is_today=1 и today_date < today → перенос, carry_count+1
@@ -233,7 +270,20 @@ add_today(conn, task_id, today, now, replace_id=None, note='') -> dict      # н
 remove_today(conn, task_id, now, note='') -> dict
 apply_rollover(conn, plan: dict, today, now) -> dict                        # применяет план engine.plan_rollover, пишет журнал, settings.last_rollover = today; возвращает счётчики {'carried','review','regrouped','rescored'}
 journal(conn, task_id=None, limit=200) -> list
-count_by_group(conn) -> dict                # {'now': 3, ...} только open
+count_by_group(conn) -> dict                # {'now': 3, ..., 'inbox': 2} — 7 ключей, только open
+# ---- v2
+migrate(conn) -> int                        # приводит схему к version 2, возвращает версию; вызывается из connect()
+list_projects(conn, include_archived=False) -> list        # dict: id, name, color, sort, archived, created_at, open_count
+get_project(conn, project_id) -> Optional[dict]
+create_project(conn, name, color=None, now=None, project_id=None) -> dict   # slug из name (транслитерация/латиница, иначе 'p-<n>'); ValueError('name'|'color'|'id')
+update_project(conn, project_id, name=None, color=None, sort=None, archived=None, now=None) -> dict  # 'praxis' нельзя архивировать
+delete_project(conn, project_id) -> None    # только если нет открытых и сделанных задач, иначе ValueError('not_empty'); 'praxis' нельзя
+set_project(conn, task_id, project_id, now) -> dict        # journal 'project_change'
+create_task(conn, title, note, answers, evaluation, now, project='praxis')  # evaluation=None и answers=None → «Входящие» (см. §4)
+apply_evaluation(...)                       # дополнительно: evaluated=1 (выход из inbox)
+list_tasks(..., project=None)               # фильтр по проекту; group='inbox' допустим
+count_by_project(conn) -> dict              # {'praxis': 5, ...} только open
+calendar_cache_get(conn) -> Optional[dict] / calendar_cache_set(conn, payload: dict)
 ```
 Все `datetime` в ISO 8601 без зоны (`2026-10-25T18:30:00`), даты `YYYY-MM-DD`. Время берётся локальное (Mac).
 
@@ -246,24 +296,36 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 | GET | `/api/settings` | | настройки §4.2 |
 | PUT | `/api/settings` | частичный объект | итоговые настройки; 400 при невалидных |
 | GET | `/api/tasks` | `?group=&who=&duration=&due=&status=open|done|all&sort=score|due|created&needs_review=1` | `{tasks:[Task]}` |
-| POST | `/api/tasks` | `{title, note?, answers:{importance, due, consequence, who, delegate_to?, duration, depends_on?}}` | 201 `{task: Task, hints:[...]}`; 400 `{error:"validation", field:"importance"}` |
+| POST | `/api/tasks` | `{title, note?, project?, answers?:{importance, due, consequence, who, delegate_to?, duration, depends_on?}}` | 201 `{task: Task, hints:[...]}`; без `answers` → задача во «Входящих» (`group:"inbox"`); `title` может содержать `#Проект` (engine.parse_quick_add) — тогда проект берётся из текста, а из названия удаляется; 400 `{error:"validation", field:"importance"|"project"}` |
 | POST | `/api/tasks/preview` | `{answers}` | `{score, group, due_date, hints}` — итог мастера без сохранения |
 | GET | `/api/tasks/{id}` | | `{task}`; 404 |
-| PATCH | `/api/tasks/{id}` | `{title?, note?}` | `{task}` |
+| PATCH | `/api/tasks/{id}` | `{title?, note?, project?}` | `{task}`; смена проекта → журнал `project_change` |
 | POST | `/api/tasks/{id}/evaluate` | `{answers}` | `{task, hints}` — повторный мастер |
 | POST | `/api/tasks/{id}/move` | `{group}` | `{task}`; 400 при неизвестной группе |
 | POST | `/api/tasks/{id}/done` | | `{task}`; повторный вызов для уже сделанной — идемпотентно (без записи в журнал) |
 | POST | `/api/tasks/{id}/reopen` | | `{task}`; идемпотентно для открытой |
 | DELETE | `/api/tasks/{id}` | | `{task}` (status=deleted) |
-| GET | `/api/today` | | `{date, limit, tasks:[Task], candidates:[Task], pool:[Task], free_slots:int}` — `candidates` = предложение на свободные места (пусто при полном дне), `pool` = все открытые задачи 🔴 вне дня (для замены при полном дне) |
+| GET | `/api/today` | | `{date, limit, tasks:[Task], candidates:[Task], pool:[Task], free_slots:int, events:[Event], calendar:{configured:bool, fetched_at, error}}` — `candidates` = предложение на свободные места (пусто при полном дне), `pool` = все открытые задачи 🔴 вне дня; `events` — события календаря на эту дату (§12) |
+| GET | `/api/upcoming` | `?days=7` (1..31) | `{from, days:[{date, weekday, tasks:[Task], events:[Event]}], overdue:[Task]}` — задачи по `due_date` (open), события календаря |
+| GET | `/api/inbox` | | `{tasks:[Task]}` — `group='inbox'`, порядок created_at ↓ |
+| GET | `/api/projects` | `?archived=1` | `{projects:[{id,name,color,sort,archived,open_count}]}` |
+| POST | `/api/projects` | `{name, color?}` | 201 `{project}`; 400 validation |
+| PATCH | `/api/projects/{id}` | `{name?, color?, sort?, archived?}` | `{project}`; 404; 400 `{error:"validation", field:"archived"}` для `praxis` |
+| DELETE | `/api/projects/{id}` | | `{ok:true}`; 409 `{error:"not_empty"}`; 400 для `praxis` |
+| GET | `/api/calendar` | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (≤ 62 дней; по умолчанию сегодня..+7) | `{events:[Event], configured, fetched_at, error}` — из кэша; если кэш старше `calendar_refresh_min` минут → обновляется в фоне (ответ из старого кэша не ждёт сети) |
+| POST | `/api/calendar/refresh` | | синхронно загружает все `calendar_urls` (таймаут 10 с каждый), `{events_count, fetched_at, errors:[...]}`; 400 `{error:"not_configured"}` |
+| POST | `/api/shutdown` | | `{ok:true}` и сервер завершается через 0.5 с (кнопка «Выключить Fokus» в приложении) |
+
+`Event` = `{uid, summary, location, start, end, all_day, calendar}`; `start`/`end` — `YYYY-MM-DDTHH:MM` в часовом поясе настроек или `YYYY-MM-DD` для событий на весь день (`end` исключительный).
 | POST | `/api/today` | `{task_id, replace_id?}` | 200 `{tasks, free_slots}`; 409 `{error:"day_full", limit, tasks}` если мест нет и нет replace_id; 400 `{error:"not_now_group"}` если задача не в группе `now`; 400 `{error:"not_open"}` |
 | DELETE | `/api/today/{task_id}` | | `{tasks, free_slots}` |
-| GET | `/api/board` | `?sort=score|due|created` | `{groups:{now:{count, tasks:[...]}, priority:{...}, queue, delegate, someday, waiting}, review:[Task]}` |
+| GET | `/api/board` | `?sort=score|due|created&project=` | `{groups:{now:{count, tasks:[...]}, priority:{...}, queue, delegate, someday, waiting, inbox}, review:[Task], projects:[...]}` |
 | GET | `/api/review` | | `{tasks:[Task]}` — needs_review=1 |
 | GET | `/api/journal` | `?task_id=&limit=` | `{entries:[...]}` — каждая запись + `title` задачи (JOIN) |
 | POST | `/api/rollover` | `{today?: "YYYY-MM-DD"}` | `{carried, review, regrouped, rescored, cleared, today}`. 400, если `today` раньше `last_rollover` (назад во времени нельзя) или `today` в будущем без тестового режима `FOKUS_TODAY` |
 
-Объект `Task` = строка таблицы как dict (`grp`→`group`), плюс `days_left` (int|null) и `hints` (list).
+Объект `Task` = строка таблицы как dict (`grp`→`group`), плюс `days_left` (int|null), `hints` (list), `project` (slug), `project_name`, `project_color`, `evaluated` (0|1).
+Задачу из `inbox` нельзя поставить в «Сегодня» (400 `not_now_group`) и переносить вручную в группу (400 `validation` field `group`) — сначала мастер.
 
 Правила сервера:
 - Перед обработкой любого `/api/*` запроса: если `settings.last_rollover` < сегодняшней даты → выполнить rollover автоматически (один раз в день).
@@ -278,16 +340,30 @@ count_by_group(conn) -> dict                # {'now': 3, ...} только open
 - Запуск: `python3 server.py` → бэкап БД → сервер (`ThreadingHTTPServer`), один глобальный `threading.Lock` на операции с БД.
 - Переменные: `FOKUS_PORT` (4321), `FOKUS_DB` (путь к БД, по умолчанию `data/fokus.db` рядом со скриптом), `FOKUS_TODAY`.
 
-## 8. Интерфейс (static/index.html)
-Один файл, тёмный фон `#0f1115`, крупный белый текст (базовый 18px, задачи дня 26–32px), без внешних библиотек.
-Цвета групп: now `#e5484d`, priority `#f5a623`, queue `#3b82f6`, delegate `#d4d4d8`, someday `#52525b`, waiting `#8b5cf6`.
-Нижняя/боковая навигация из 5 экранов:
-1. **Сегодня** — до 3 задач крупно, галочка «готово», кнопка «+ добавить из 🔴» показывает кандидатов; при полном дне — диалог «замени одну из трёх». Счётчик «перенесено N раз». Задачи с `needs_review` помечены «пройти вопросы заново».
-2. **Добавить** — поле названия (подсказка «пациенты — только номер tomedo») → 6 шагов мастера (по одному вопросу на экран, крупные кнопки) → итог: группа + балл + подсказки (`/api/tasks/preview`) → «Сохранить».
-3. **Доска** — 6 групп с количеством, сортировка балл/срок/дата; у задачи: балл, срок, перенос в другую группу (пометка «вручную»), «готово», «пройти вопросы заново», удалить.
-4. **Фильтры** — по группе, сроку, «кто делает», длительности; результат списком.
-5. **Настройки** — веса (4 ползунка/поля), пороги групп, лимит в день, язык RU/DE, журнал последних изменений.
-Язык: все подписи из `/api/i18n?lang=`, переключение без перезагрузки.
+## 8. Интерфейс v2 (static/index.html) — «как Todoist, но под мои возможности»
+Один файл, без внешних библиотек. Тёмная тема по умолчанию (`theme: dark`), светлая — по настройке. Шрифт системный, базовый 15px, строки списка 44–48px, крупные заголовки.
+Цвета (тёмная): фон окна `#1f1f1f`, боковая панель `#282828`, карточки/ховер `#2e2e2e`, границы `#3a3a3a`, текст `#f2f2f2`, вторичный `#a3a3a3`, акцент (кнопка «Добавить») `#e5484d`.
+Цвета групп как в v1: now `#e5484d`, priority `#f5a623`, queue `#3b82f6`, delegate `#d4d4d8`, someday `#52525b`, waiting `#8b5cf6`, inbox `#a3a3a3`.
+
+**Раскладка**: слева боковая панель 260px (сворачивается кнопкой ☰ на узких экранах), справа основная область до 760px по центру.
+Боковая панель сверху вниз:
+1. Заголовок «Fokus» + дата; кнопка **«+ Добавить задачу»** (красная, как в Todoist; клавиша `q`).
+2. Навигация: **Сегодня** (счётчик «n из limit»), **Входящие** (счётчик), **Предстоящие** (7 дней: календарь + задачи по сроку), **Нужна переоценка** (показывается только если > 0).
+3. Раздел **Группы**: 🔴 Сейчас (группа `now`) · 🟠 Приоритет · 🔵 Очередь · ⚪ Делегировать · ⚫ Отложить · ⏸ Ждут — с цветной точкой и счётчиком открытых.
+4. Раздел **Проекты**: Praxis · Privat · Projekt · … (цветная точка, счётчик) + «+ Проект». Клик — список задач проекта, сгруппированный по группам.
+5. Внизу: **Настройки**, переключатель RU/DE, кнопка «Выключить Fokus».
+
+**Список задач** (общий компонент для всех видов): строка = круглый чекбокс (обводка цветом группы; клик → сделано с анимацией и тостом «Сделано · Отменить»), название, справа тонкие бейджи; вторая строка мелко: срок (красным, если сегодня/просрочено), длительность, балл, проект (цветная точка + имя), «перенесено N раз», «вручную», «пройти вопросы заново». При наведении — иконки действий: ✎ изменить, ⇄ группа, 📁 проект, ☆ в «Сегодня» (только для `now`), 🗑. Клик по строке — **панель задачи** справа (или модально на узком экране): название (редактируемое), заметка, проект, все 6 ответов с подписями, балл и группа, кнопки «Пройти вопросы заново», «В «Сегодня»/Убрать из дня», журнал задачи.
+**Быстрое добавление**: по кнопке или `q` вверху списка раскрывается композер: поле «Название задачи… (#Praxis, #Privat — проект)», подсказка про tomedo, выбор проекта (чип), кнопки **«Оценить» (Enter)** → модальный мастер 6 вопросов → итог (группа, балл, подсказки) → «Сохранить» (+ предложение поставить в «Сегодня», если 🔴 и есть место) и **«Во Входящие» (Shift+Enter)** → сохранить без мастера. `Esc` закрывает.
+**Сегодня**: заголовок «Сегодня · пн, 27 окт.» и «n из limit»; секция «Задачи дня» (строки чуть крупнее, нумерация 1–3; при полном дне кнопка «+» открывает выбор замены); секция «Календарь» — события дня из Google (время, название, место), если календарь не подключён — строка-ссылка «Подключить Google Календарь»; секция «Кандидаты из 🔴» с кнопкой ☆ «в день»; при полном дне — «Заменить одну из задач дня».
+**Входящие**: список + у каждой строки кнопка «Оценить» (мастер). Пустое состояние: «Входящие пусты. Нажми q, чтобы быстро записать задачу».
+**Предстоящие**: сначала «Просрочено» (если есть), затем 7 дней: заголовок дня (дата, день недели), события календаря, задачи с этим сроком.
+**Группа / Проект**: заголовок с описанием группы, сортировка (балл/срок/дата), фильтр-чипы по проекту (в группе) или по группе (в проекте).
+**Нужна переоценка**: список с причиной и кнопкой «Пройти вопросы заново».
+**Настройки**: тема (тёмная/светлая), язык, лимит задач в день, переоценка (дней/переносов), веса и пороги (свернуты в «Расширенные»), проекты (переименовать/цвет/архив/добавить), **Google Календарь**: поле «Секретные адреса iCal (по одному в строке)» + пошаговая подсказка, где взять адрес, кнопка «Проверить и обновить» (показывает число событий и ошибки), часовой пояс; журнал (последние 50); кнопка «Выключить Fokus».
+**Клавиатура**: `q` — добавить, `Esc` — закрыть, `1`–`6` в мастере — выбор варианта, `Enter` — далее.
+**Состояния**: ошибка сети → тост «Сервер не отвечает»; смена дня → тост и перерисовка; загрузка — скелетоны строк. Все тексты — из `/api/i18n`, DE полностью.
+**Без innerHTML с пользовательскими данными** — только `textContent`.
 
 ## 9. Решения, принятые координатором (можно оспорить — тогда правим здесь и в коде)
 | № | Решение | Почему |
@@ -332,3 +408,35 @@ Fokus доступен ИИ-агентам по Model Context Protocol (тран
 `fokus_delete`, `fokus_review`, `fokus_journal`, `fokus_settings`. Промпт `fokus_wizard` — сценарий 6 вопросов для агента.
 Коды ответов (`today`, `5m`, `now` …) те же, что в §3. Установка: `python3 mcp_server.py --install` (Claude Desktop, со слиянием конфига и копией `.bak`)
 или `claude mcp add fokus -- python3 ~/Projects/fokus/mcp_server.py` (Claude Code). Тесты: `tests/test_mcp.py`.
+
+## 12. Google Календарь (calendar_ics.py) — только чтение, без OAuth
+Пользователь копирует в Настройках «Секретный адрес в формате iCal» (Google Календарь → Настройки → календарь → «Интеграция календаря»). Fokus загружает `.ics` по https, разбирает и показывает события в «Сегодня» и «Предстоящие». Записи в календарь нет (это v3 через OAuth).
+Публичный API модуля (чистые функции, только stdlib; `zoneinfo` для часовых поясов):
+```python
+fetch_ics(url: str, timeout: float = 10.0, max_bytes: int = 5_000_000) -> str   # только https; ValueError('url') / OSError
+unfold(text: str) -> List[str]                 # склейка продолжений строк (RFC 5545 §3.1), CRLF/LF
+parse_ics(text: str) -> List[dict]             # VEVENT → {'uid','summary','location','description','dtstart','dtend','all_day','rrule','exdates','recurrence_id','duration','status'}
+    # dtstart/dtend: date (VALUE=DATE) или datetime с tzinfo (TZID=… через zoneinfo; Z → UTC; без зоны → "floating", трактуется в tz календаря X-WR-TIMEZONE или заданном)
+    # DTEND отсутствует → для даты +1 день, для datetime = dtstart (+DURATION, если есть); STATUS:CANCELLED → пропускается
+expand(vevents: List[dict], start: date, end: date, tz: str) -> List[dict]   # вхождения в [start, end): RRULE FREQ=DAILY|WEEKLY|MONTHLY|YEARLY, INTERVAL, COUNT, UNTIL, BYDAY (в т.ч. 2MO, -1FR для MONTHLY), BYMONTHDAY, BYMONTH, WKST; EXDATE; RECURRENCE-ID переопределяет конкретное вхождение; неизвестные части RRULE → игнорировать, но не падать
+    # результат Event (§7): start/end в tz как 'YYYY-MM-DDTHH:MM' или 'YYYY-MM-DD' (all_day), отсортирован по start; ограничение 5000 вхождений
+refresh(urls: List[str], today: date, tz: str, days_back: int = 7, days_forward: int = 60, fetch=fetch_ics) -> dict
+    # {'events': [...], 'fetched_at': 'ISO', 'errors': [{'url_index': i, 'message': '...'}], 'window': ['YYYY-MM-DD','YYYY-MM-DD']}; одна сломанная ссылка не отменяет остальные; 'calendar' = индекс ссылки (0..)
+events_between(cache: dict, start: date, end: date) -> List[dict]
+```
+Сервер: кэш в `settings.calendar_cache`; `/api/today` и `/api/upcoming` берут события из кэша; если кэш старше `calendar_refresh_min` → обновление в фоновом потоке (не под Lock на время сети; запись результата — под Lock). Секретный адрес — это пароль к календарю: не логировать, не отдавать в `/api/health`, в `/api/settings` показывать как есть (локальное приложение), в экспорт/бэкап он попадает вместе с БД.
+
+## 13. Fokus.app (macOS-приложение)
+Папка `Fokus.app` внутри проекта — обычный bundle без подписи: `Contents/Info.plist` (CFBundleName Fokus, CFBundleIdentifier de.fokus.app, CFBundleExecutable Fokus, CFBundleIconFile Fokus, LSMinimumSystemVersion 11.0), `Contents/MacOS/Fokus` (bash 3.2, исполняемый), `Contents/Resources/Fokus.icns` (генерируется `tools/make_icon.py` без PIL: PNG через zlib → ICNS с типами ic07–ic13).
+Скрипт `Contents/MacOS/Fokus`: корень проекта = `../../..` от скрипта (разрешая симлинк); если `/api/health` отвечает — только открыть окно; иначе запустить `python3 server.py` через `nohup … >> data/server.log 2>&1 &` (сервер живёт после выхода скрипта), подождать health до 8 с; открыть окно: если установлен Chromium-браузер (Google Chrome, Chromium, Brave, Microsoft Edge, Arc) → `open -na "<браузер>" --args --app=http://127.0.0.1:PORT` (окно без адресной строки), иначе `open URL` в браузере по умолчанию; при ошибке — `osascript -e 'display dialog …'` с понятным текстом. Терминал не открывается. Остановка — кнопка «Выключить Fokus» в Настройках (`POST /api/shutdown`) или `Fokus.command` → Ctrl+C.
+Карантин: при скачивании zip с GitHub macOS ставит quarantine → «не удаётся проверить разработчика» → правый клик → «Открыть» (один раз). При `git clone` карантина нет. Альтернатива окну: Safari → «Файл → Добавить в Dock» на http://127.0.0.1:4321.
+
+## 14. Решения v2
+| № | Решение | Почему |
+|---|---|---|
+| 19 | «Входящие» — задачи без мастера (`inbox`, `evaluated=0`): в балле, переносах, «Сегодня» не участвуют, пока не пройдут мастер | быстрый захват как в Todoist, но правило «каждая задача проходит фильтры» сохраняется |
+| 20 | Проекты — плоский список (Praxis/Privat/Projekt + свои), без вложенности и секций | достаточно для одного человека; вложенность усложняет выбор |
+| 21 | Календарь — только чтение по iCal-адресу, без OAuth и без записи | подключение за минуту без Google Cloud; запись в календарь — v3 |
+| 22 | Fokus.app — bash-bundle без подписи; окно через `--app=` Chromium-браузера, иначе обычная вкладка | нет компиляции и зависимостей; Safari «Добавить в Dock» как альтернатива |
+| 23 | Тёмная тема по умолчанию, светлая — опция | по требованию владельца |
+| 24 | Клавиша `q` — добавить, `Esc` — закрыть, Enter в композере — мастер, Shift+Enter — во Входящие | как в Todoist, с уклоном в «сначала оцени» |
