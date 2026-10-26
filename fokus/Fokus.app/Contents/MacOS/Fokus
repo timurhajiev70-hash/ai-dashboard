@@ -1,0 +1,188 @@
+#!/bin/bash
+# Fokus.app/Contents/MacOS/Fokus — исполняемый файл приложения Fokus (macOS, bundle без подписи).
+# Запуск двойным кликом по Fokus.app: Терминал не открывается, сервер живёт сам, окно — в браузере.
+#
+# Что делает (AGENTS.md §13):
+#   1. корень проекта = ../../.. от этого файла (разрешая символическую ссылку на Fokus.app или на сам файл);
+#   2. если Fokus уже отвечает на /api/health — только открывает окно;
+#   3. иначе проверяет Python 3 (>= 3.9), запускает `nohup python3 server.py >> data/server.log 2>&1 &`,
+#      ждёт ответа /api/health до 8 секунд;
+#   4. открывает окно: Chromium-браузер (Google Chrome, Chromium, Brave Browser, Microsoft Edge, Arc) →
+#      `open -na "<браузер>" --args --app=URL` (окно без адресной строки), иначе `open URL`;
+#   5. завершает работу сразу после открытия окна. Ошибки — диалог macOS (osascript display dialog).
+# Остановка Fokus: кнопка «Выключить Fokus» в Настройках (POST /api/shutdown) или Fokus.command → [s].
+#
+# Переменные окружения:
+#   FOKUS_PORT     порт (по умолчанию 4321)
+#   FOKUS_DB       путь к базе (по умолчанию data/fokus.db рядом с server.py) — читает server.py
+#   FOKUS_PYTHON   интерпретатор вместо python3 из PATH (для тестов)
+#   FOKUS_OPEN     команда открытия окна вместо `open` (для тестов на Linux: FOKUS_OPEN=true)
+#   FOKUS_BROWSER  имя браузера для окна --app= (например "Brave Browser") или `default` — обычная вкладка
+#                  в браузере по умолчанию; пусто — перебрать известные Chromium-браузеры
+#
+# Совместимо с /bin/bash 3.2 (системный bash macOS): без ассоциативных массивов, ${var,,}, |&, mapfile и т.п.
+
+set -u
+
+PORT="${FOKUS_PORT:-4321}"
+URL="http://127.0.0.1:$PORT"
+HEALTH_URL="$URL/api/health"
+OPEN_CMD="${FOKUS_OPEN:-}"
+BROWSER="${FOKUS_BROWSER:-}"
+LOG_REL="data/server.log"
+WAIT_TICKS=16                      # 16 × 0.5 с = 8 секунд ожидания /api/health
+
+# Finder запускает приложение с минимальным PATH — добавим обычные места установки Python (после системных).
+PATH="$PATH:/usr/local/bin:/opt/homebrew/bin"
+export PATH
+PYTHON="$(command -v "${FOKUS_PYTHON:-python3}" 2>/dev/null || true)"
+
+# ----------------------------------------------------------------- вспомогательные функции
+
+# dialog "текст" — модальное окно macOS; без osascript (Linux, тесты) — текст в stderr.
+dialog() {
+  local text="$1" esc
+  if command -v osascript >/dev/null 2>&1; then
+    # экранируем \ и " для AppleScript; переводы строк → " & return & "
+    esc="$(printf '%s' "$text" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+          | awk 'NR > 1 { printf "\" & return & \"" } { printf "%s", $0 }')"
+    osascript -e "display dialog \"$esc\" with title \"Fokus\" buttons {\"OK\"} default button \"OK\" with icon stop" \
+      >/dev/null 2>&1 || printf 'Fokus: %s\n' "$text" >&2
+  else
+    printf 'Fokus: %s\n' "$text" >&2
+  fi
+}
+
+# fail "текст" — диалог и выход с кодом 1.
+fail() {
+  dialog "$1"
+  exit 1
+}
+
+# Разрешить цепочку символических ссылок без `readlink -f` (его нет в старых macOS).
+resolve_path() {
+  local target="$1" dir
+  while [ -L "$target" ]; do
+    dir="$(cd -P "$(dirname "$target")" && pwd)" || return 1
+    target="$(readlink "$target")" || return 1
+    case "$target" in
+      /*) ;;
+      *) target="$dir/$target" ;;
+    esac
+  done
+  dir="$(cd -P "$(dirname "$target")" && pwd)" || return 1
+  printf '%s/%s\n' "$dir" "$(basename "$target")"
+}
+
+# http_get URL — тело ответа или пусто (curl, иначе python).
+http_get() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -s --max-time 1 "$1" 2>/dev/null || true
+  elif [ -n "$PYTHON" ]; then
+    "$PYTHON" -c 'import sys, urllib.request
+try:
+    print(urllib.request.urlopen(sys.argv[1], timeout=1).read().decode("utf-8", "replace"))
+except Exception:
+    pass' "$1" 2>/dev/null || true
+  fi
+}
+
+# 0 = на порту уже отвечает Fokus (в ответе /api/health есть "ok").
+is_running() {
+  case "$(http_get "$HEALTH_URL")" in
+    *'"ok"'*) return 0 ;;
+  esac
+  return 1
+}
+
+# open_app_window "Имя браузера" — 0, если браузер установлен и окно --app= открыто.
+open_app_window() {
+  open -Ra "$1" >/dev/null 2>&1 || return 1
+  open -na "$1" --args --app="$URL" --window-size=1200,820 >/dev/null 2>&1
+}
+
+# Открыть окно Fokus: FOKUS_OPEN (тесты) → заданный/найденный Chromium-браузер → браузер по умолчанию.
+open_window() {
+  local b
+  if [ -n "$OPEN_CMD" ]; then
+    "$OPEN_CMD" "$URL" >/dev/null 2>&1 || dialog "Не удалось открыть окно — откройте адрес вручную: $URL"
+    return 0
+  fi
+  if ! command -v open >/dev/null 2>&1; then
+    dialog "Команда open не найдена — откройте адрес вручную: $URL"
+    return 0
+  fi
+  if [ "$BROWSER" != "default" ]; then
+    if [ -n "$BROWSER" ]; then
+      open_app_window "$BROWSER" && return 0
+    else
+      for b in "Google Chrome" "Chromium" "Brave Browser" "Microsoft Edge" "Arc"; do
+        open_app_window "$b" && return 0
+      done
+    fi
+  fi
+  open "$URL" >/dev/null 2>&1 || dialog "Не удалось открыть браузер — откройте адрес вручную: $URL"
+  return 0
+}
+
+# ----------------------------------------------------------------- 1. корень проекта
+
+SELF="$(resolve_path "$0" 2>/dev/null || printf '%s' "$0")"
+# cd -P разрешает символическую ссылку на Fokus.app до обработки «..», pwd -P отдаёт физический путь.
+ROOT="$(cd -P "$(dirname "$SELF")" 2>/dev/null && cd -P ../../.. 2>/dev/null && pwd -P)" || ROOT=""
+if [ -z "$ROOT" ]; then
+  fail "Не удалось определить папку проекта Fokus (три уровня выше $SELF)."
+fi
+if [ ! -f "$ROOT/server.py" ]; then
+  fail "Рядом с Fokus.app нет server.py (искал в $ROOT).
+Fokus.app должен лежать в папке проекта (например ~/Projects/fokus); ярлык на рабочем столе — символическая ссылка, а не копия."
+fi
+cd "$ROOT" || fail "Не удалось перейти в папку $ROOT."
+
+# ----------------------------------------------------------------- 2. уже запущен? — только окно
+
+if is_running; then
+  open_window
+  exit 0
+fi
+
+# ----------------------------------------------------------------- 3. Python 3 >= 3.9
+
+if [ -z "$PYTHON" ]; then
+  fail "Нужен Python 3: откройте Терминал и выполните xcode-select --install, затем запустите Fokus снова."
+fi
+if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+  fail "Нужен Python 3 не ниже 3.9 (найден $PYTHON): откройте Терминал и выполните xcode-select --install."
+fi
+
+# ----------------------------------------------------------------- 4. запуск сервера в фоне
+
+mkdir -p data || fail "Не удалось создать папку $ROOT/data."
+export FOKUS_PORT="$PORT"
+nohup "$PYTHON" server.py >> "$LOG_REL" 2>&1 < /dev/null &
+SERVER_PID=$!
+
+i=0
+up=0
+while [ "$i" -lt "$WAIT_TICKS" ]; do
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    break
+  fi
+  if is_running; then
+    up=1
+    break
+  fi
+  sleep 0.5
+  i=$((i + 1))
+done
+
+if [ "$up" -ne 1 ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
+  last="$(tail -n 1 "$LOG_REL" 2>/dev/null || true)"
+  fail "Fokus не запустился.
+${last:-Подробности в $LOG_REL.}
+Если порт $PORT занят: закройте ту программу или задайте другой порт (FOKUS_PORT=4322)."
+fi
+
+# Сервер работает (или ещё стартует — страница сама обновится). Открываем окно и выходим; сервер живёт сам.
+open_window
+exit 0

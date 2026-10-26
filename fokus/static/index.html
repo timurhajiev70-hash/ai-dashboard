@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Fokus</title>
+<link rel="icon" href="data:,">
+<style>
+/* ============================================================
+   Fokus v2 — интерфейс в стиле Todoist: боковая панель + список.
+   AGENTS.md §8. Весь CSS здесь; разметка строится в JS через el().
+   ============================================================ */
+:root {
+  --bg: #1f1f1f; --side: #282828; --card: #2a2a2a; --hover: #333333; --border: #3a3a3a; --border-soft: #313131;
+  --text: #f2f2f2; --muted: #a3a3a3; --faint: #8c8c8c; --accent: #d13a3f; --accent-text: #fff; --warn: #ffd38a;
+  --ok: #3fb950; --link: #7cb3ff; --shadow: 0 12px 40px rgba(0,0,0,.55);
+  --g-now: #e5484d; --g-priority: #f5a623; --g-queue: #3b82f6; --g-delegate: #d4d4d8; --g-someday: #6b6b70; --g-waiting: #8b5cf6; --g-inbox: #a3a3a3;
+  --side-w: 262px; --detail-w: 400px; --radius: 10px; --fs: 15px;
+}
+:root[data-theme="light"] {
+  --bg: #ffffff; --side: #fcfaf8; --card: #f6f4f2; --hover: #f1efec; --border: #e5e2de; --border-soft: #eeebe7;
+  --text: #202020; --muted: #6b6b6b; --faint: #767676; --accent: #c53d33; --warn: #8a5a00; --ok: #2e9e46; --link: #2563eb; --shadow: 0 12px 40px rgba(0,0,0,.18);
+  --g-delegate: #8a8a8f; --g-someday: #9a9a9f; --g-inbox: #8a8a8f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+body { font: var(--fs)/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+a { color: var(--link); }
+h1, h2, h3 { margin: 0; font-weight: 700; }
+.muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: 13px; }
+.row { display: flex; align-items: center; gap: 8px; } .grow { flex: 1 1 auto; min-width: 0; } .wrap { flex-wrap: wrap; }
+.hidden { display: none !important; }
+
+/* --- каркас --------------------------------------------------- */
+.app { display: grid; grid-template-columns: var(--side-w) 1fr; height: 100%; }
+.app.detail-open { grid-template-columns: var(--side-w) 1fr var(--detail-w); }
+aside.sidebar { background: var(--side); border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; padding: 14px 10px; overflow-y: auto; }
+main { overflow-y: auto; position: relative; }
+.main-inner { max-width: 780px; margin: 0 auto; padding: 26px 36px 120px; }
+aside.detail { background: var(--side); border-left: 1px solid var(--border-soft); overflow-y: auto; display: none; }
+.app.detail-open aside.detail { display: block; }
+
+/* --- боковая панель ------------------------------------------- */
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 10px; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+.brand .logo i { width: 12px; height: 12px; border-radius: 50%; border: 3px solid #fff; display: block; }
+.brand h1 { font-size: 18px; } .brand .date { font-size: 12px; color: var(--muted); }
+.btn-add { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border-radius: 8px; color: var(--accent); font-weight: 600; margin: 4px 0 10px; }
+.btn-add:hover { background: var(--hover); }
+.btn-add .plus { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 20px; line-height: 1; }
+.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border-radius: 7px; color: var(--text); text-align: left; }
+.nav-item:hover { background: var(--hover); } .nav-item.active { background: var(--hover); font-weight: 600; }
+.nav-item .ic { width: 18px; text-align: center; color: var(--muted); flex: none; }
+.nav-item .cnt { margin-left: auto; color: var(--muted); font-size: 12px; }
+.nav-item .cnt.alert { color: var(--accent); font-weight: 600; }
+.nav-sec { margin-top: 16px; padding: 4px 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; display: flex; align-items: center; }
+.nav-sec button { margin-left: auto; color: var(--muted); font-size: 18px; line-height: 1; padding: 0 4px; border-radius: 6px; } .nav-sec button:hover { background: var(--hover); color: var(--text); }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.side-foot { margin-top: auto; padding-top: 14px; display: flex; flex-direction: column; gap: 4px; }
+.side-foot .kbd { padding: 6px 10px; color: var(--faint); font-size: 12px; }
+.lang-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; margin: 4px 10px; }
+.lang-toggle button { padding: 3px 10px; font-size: 13px; color: var(--muted); } .lang-toggle button.on { background: var(--hover); color: var(--text); font-weight: 600; }
+
+/* --- заголовок вида ------------------------------------------- */
+.view-head { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 18px; }
+.view-head h2 { font-size: 24px; } .view-head .sub { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.view-head .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.view-head .counter { font-size: 14px; color: var(--muted); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.chip { padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.chip:hover { background: var(--hover); color: var(--text); } .chip.on { background: var(--hover); color: var(--text); border-color: var(--muted); }
+.section { margin: 22px 0 8px; display: flex; align-items: baseline; gap: 10px; }
+.section h3 { font-size: 15px; } .section .cnt { color: var(--muted); font-size: 13px; }
+.empty { padding: 26px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius); font-size: 14px; }
+.empty b { color: var(--text); }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); font-weight: 600; font-size: 14px; }
+.btn:hover { background: var(--hover); } .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); } .btn.primary:hover { filter: brightness(1.08); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); } .btn.ghost:hover { background: var(--hover); color: var(--text); }
+.btn.small { padding: 4px 10px; font-size: 13px; } .btn.danger { color: #ff8a8e; } .btn:disabled { opacity: .5; cursor: default; }
+.link-btn { color: var(--link); font-size: 14px; } .link-btn:hover { text-decoration: underline; }
+
+/* --- строка задачи -------------------------------------------- */
+.task { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: start; padding: 9px 8px 9px 4px; border-bottom: 1px solid var(--border-soft); position: relative; border-radius: 6px; }
+.task:hover { background: var(--hover); }
+.task.selected { background: var(--hover); }
+.task .check { width: 22px; height: 22px; margin-top: 2px; border-radius: 50%; border: 2px solid var(--c, var(--muted)); background: color-mix(in srgb, var(--c, var(--muted)) 14%, transparent); display: grid; place-items: center; color: transparent; font-size: 13px; transition: background .15s, color .15s; flex: none; }
+.task .check:hover { color: var(--c, var(--muted)); } .task.done .check { background: var(--c, var(--muted)); color: #fff; }
+.task .check.checking { background: var(--c); color: #fff; transform: scale(1.1); }
+.task .body { min-width: 0; cursor: pointer; }
+.task .title { font-size: 15px; line-height: 1.35; word-break: break-word; } .task.done .title { color: var(--muted); text-decoration: line-through; }
+.task.big .title { font-size: 17px; font-weight: 600; }
+.task .note { color: var(--muted); font-size: 13px; margin-top: 2px; white-space: pre-wrap; word-break: break-word; max-height: 3.9em; overflow: hidden; }
+.task .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 3px; font-size: 12px; color: var(--muted); align-items: center; }
+.task .meta .due.today, .task .meta .due.overdue { color: var(--accent); font-weight: 600; }
+.task .meta .due.tomorrow { color: var(--g-priority); }
+.task .meta .proj { display: inline-flex; align-items: center; gap: 5px; }
+.task .num { position: absolute; left: -26px; top: 10px; color: var(--faint); font-size: 13px; font-weight: 700; width: 20px; text-align: right; }
+.badge { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); line-height: 18px; }
+.badge.warn { color: #ffd38a; border-color: #6b4e14; } .badge.alert { color: #ffb4b6; border-color: #6b2a2d; } .badge.ok { color: #9fe8b4; border-color: #1f5a2f; }
+:root[data-theme="light"] .badge.warn { color: #8a5a00; border-color: #f0d49a; } :root[data-theme="light"] .badge.alert { color: #b42318; border-color: #f3b4b0; } :root[data-theme="light"] .badge.ok { color: #1b7a35; border-color: #a8e1b6; }
+.task .actions { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; align-self: center; }
+.task:hover .actions, .task:focus-within .actions { opacity: 1; }
+.ib { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); font-size: 15px; } .ib:hover { background: var(--card); color: var(--text); }
+.ib.primary { color: var(--link); } .ib.danger:hover { color: #ff8a8e; }
+.task .quick { align-self: center; }
+.list.numbered { padding-left: 26px; }
+
+/* --- события календаря ----------------------------------------- */
+.event { display: grid; grid-template-columns: 110px 1fr; gap: 10px; padding: 7px 8px; border-left: 3px solid var(--link); margin: 4px 0; background: var(--card); border-radius: 6px; font-size: 14px; }
+.event .time { color: var(--muted); font-variant-numeric: tabular-nums; } .event .ttl { word-break: break-word; } .event .loc { color: var(--muted); font-size: 12px; }
+.day-head { display: flex; align-items: baseline; gap: 10px; margin: 20px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.day-head h3 { font-size: 15px; } .day-head .today { color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+
+/* --- композер ----------------------------------------------------- */
+.composer { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 14px; background: var(--card); }
+.composer input.ttl { width: 100%; background: transparent; border: 0; padding: 4px 2px; font-size: 16px; font-weight: 600; } .composer input.ttl:focus { outline: none; }
+.composer textarea { width: 100%; background: transparent; border: 0; padding: 2px; resize: vertical; min-height: 28px; font-size: 14px; } .composer textarea:focus { outline: none; }
+.composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); flex-wrap: wrap; }
+.composer .hint { color: var(--faint); font-size: 12px; } .composer select { padding: 4px 8px; font-size: 13px; }
+.add-row { display: flex; align-items: center; gap: 10px; padding: 9px 8px; color: var(--muted); border-radius: 6px; width: 100%; text-align: left; }
+.add-row:hover { background: var(--hover); color: var(--accent); } .add-row .plus { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; color: var(--accent); }
+
+/* --- модалки, мастер -------------------------------------------- */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 16px; z-index: 50; }
+.modal { background: var(--side); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; width: min(640px, 100%); max-height: 92vh; overflow: auto; box-shadow: var(--shadow); }
+.modal h3 { font-size: 18px; margin-bottom: 12px; }
+.modal .bar { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.wizard .q { font-size: 21px; font-weight: 700; margin: 6px 0 14px; line-height: 1.25; }
+.wizard .step { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.wizard .ttl { color: var(--muted); font-size: 14px; margin-bottom: 4px; word-break: break-word; }
+.progress { height: 4px; background: var(--card); border-radius: 2px; overflow: hidden; margin: 8px 0 14px; } .progress > div { height: 100%; background: var(--accent); transition: width .2s; }
+.opts { display: grid; gap: 6px; }
+.opt { display: flex; align-items: center; gap: 12px; text-align: left; font-size: 16px; padding: 11px 14px; border-radius: 10px; background: var(--card); border: 1.5px solid var(--border); }
+.opt:hover { border-color: var(--muted); } .opt.sel { border-color: var(--link); background: var(--hover); }
+.opt kbd { font: 600 12px/1 ui-monospace, Menlo, monospace; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; min-width: 22px; text-align: center; }
+.wizard input.wide { width: 100%; font-size: 16px; margin-top: 6px; }
+.summary { text-align: center; padding: 10px 0 0; }
+.summary .grp { font-size: 22px; font-weight: 800; display: inline-flex; align-items: center; gap: 8px; }
+.summary .sc { font-size: 52px; font-weight: 800; line-height: 1.1; margin: 6px 0; }
+.summary .hints { margin: 12px auto 0; max-width: 460px; text-align: left; display: grid; gap: 6px; }
+.summary .hints div { background: var(--card); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #262b36; border: 1px solid var(--border); color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px; max-width: min(640px, 92vw); z-index: 60; box-shadow: var(--shadow); display: flex; gap: 14px; align-items: center; }
+.toast.err { border-color: var(--accent); } .toast.ok { border-color: var(--ok); } .toast button { color: var(--link); font-weight: 600; }
+.skeleton { height: 42px; border-radius: 6px; background: linear-gradient(90deg, var(--card), var(--hover), var(--card)); background-size: 200% 100%; animation: sk 1.2s infinite; margin-bottom: 6px; }
+@keyframes sk { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* --- панель задачи ------------------------------------------------ */
+.detail-inner { padding: 18px 18px 60px; }
+.detail .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.detail input.ttl { width: 100%; font-size: 18px; font-weight: 700; background: transparent; border: 1px solid transparent; padding: 6px 8px; border-radius: 8px; }
+.detail input.ttl:hover, .detail textarea.note:hover { border-color: var(--border); }
+.detail textarea.note { width: 100%; background: transparent; border: 1px solid transparent; min-height: 60px; resize: vertical; padding: 6px 8px; border-radius: 8px; font-size: 14px; }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 14px; margin: 12px 0; }
+.kv .k { color: var(--muted); }
+.detail .block { border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 12px; }
+.detail .block h4 { margin: 0 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.jrow { font-size: 13px; color: var(--muted); padding: 3px 0; display: grid; grid-template-columns: 96px 1fr; gap: 8px; }
+.jrow b { color: var(--text); font-weight: 600; }
+
+/* --- настройки ---------------------------------------------------- */
+.card { background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+.card h3 { font-size: 16px; margin-bottom: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.field label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 4px; } .field input, .field select, .field textarea { width: 100%; }
+details summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+table.journal { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+table.journal th, table.journal td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border-soft); vertical-align: top; word-break: break-word; }
+table.journal th { color: var(--muted); font-weight: 600; } table.journal th:first-child, table.journal td:first-child { width: 20%; }
+.proj-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+.proj-row input[type=text] { flex: 1; } .proj-row input[type=color] { width: 36px; height: 30px; padding: 2px; }
+.proj-row.archived { opacity: .6; }
+.color-swatches { display: flex; gap: 6px; flex-wrap: wrap; } .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; } .swatch.on { border-color: var(--text); }
+
+/* --- узкие экраны --------------------------------------------------- */
+.menu-btn { display: none; position: fixed; top: 10px; left: 10px; z-index: 40; width: 38px; height: 38px; border-radius: 9px; background: var(--side); border: 1px solid var(--border); font-size: 18px; }
+.nav-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 44; }  /* вне сетки: иначе занимает ячейку grid */
+@media (max-width: 960px) {
+  .app, .app.detail-open { grid-template-columns: 1fr; }
+  aside.sidebar { position: fixed; inset: 0 auto 0 0; width: var(--side-w); z-index: 45; transform: translateX(-100%); transition: transform .18s; box-shadow: var(--shadow); }
+  .app.nav-open aside.sidebar { transform: none; }
+  .app.nav-open .nav-overlay { display: block; }
+  .menu-btn { display: grid; place-items: center; }
+  .main-inner { padding: 60px 16px 120px; }
+  aside.detail { position: fixed; inset: 0; width: 100%; z-index: 46; }
+  .task .actions { opacity: 1; }
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <button class="menu-btn" id="menu-btn" title="Меню">☰</button>
+  <div class="nav-overlay" id="nav-overlay"></div>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main><div class="main-inner"><div id="composer-slot"></div><div id="main"></div></div></main>
+  <aside class="detail" id="detail"></aside>
+</div>
+<script>
+(function () {
+  'use strict';
+  // ------------------------------------------------------------ константы и состояние
+  const GROUPS = ['now', 'priority', 'queue', 'delegate', 'someday', 'waiting'];
+  const GROUP_ICON = { now: '🔴', priority: '🟠', queue: '🔵', delegate: '⚪', someday: '⚫', waiting: '⏸', inbox: '📥' };
+  const GROUP_COLOR = { now: 'var(--g-now)', priority: 'var(--g-priority)', queue: 'var(--g-queue)', delegate: 'var(--g-delegate)', someday: 'var(--g-someday)', waiting: 'var(--g-waiting)', inbox: 'var(--g-inbox)' };
+  const SWATCHES = ['#14b8a6', '#22c55e', '#a855f7', '#3b82f6', '#f5a623', '#e5484d', '#ec4899', '#8b8b8b'];
+  const state = {
+    lang: 'ru', L: {}, settings: null, projects: [], counts: {}, review: 0, today: { n: 0, limit: 3 }, serverToday: '',
+    route: { view: 'today', arg: null }, sort: 'score', chip: '', composer: null, detailId: null, wiz: null, showDone: false
+  };
+
+  // ------------------------------------------------------------ утилиты
+  const $ = (s) => document.querySelector(s);
+  function t(key, vars) {
+    let s = state.L[key]; if (s === undefined) s = key;
+    if (vars) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+    return s;
+  }
+  function el(tag, attrs) {
+    const e = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      const v = attrs[k]; if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), v); else e.setAttribute(k, v === true ? '' : v);
+    }
+    for (let i = 2; i < arguments.length; i++) append(e, arguments[i]);
+    return e;
+  }
+  function append(p, c) {
+    if (c === null || c === undefined || c === false) return;
+    if (Array.isArray(c)) { c.forEach((x) => append(p, x)); return; }
+    p.appendChild(typeof c === 'object' ? c : document.createTextNode(String(c)));
+  }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); return n; }
+  function dot(color) { return el('span', { class: 'dot', style: { background: color } }); }
+  function gdot(g) { return dot(GROUP_COLOR[g] || 'var(--muted)'); }
+  const locale = () => (state.lang === 'de' ? 'de-DE' : 'ru-RU');
+  function fmtDay(iso, opts) { try { return new Intl.DateTimeFormat(locale(), opts || { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(iso + 'T00:00:00')); } catch (e) { return iso; } }
+  function fmtTime(iso) { return iso && iso.length >= 16 ? iso.slice(11, 16) : ''; }
+  function fmtTs(ts) { return String(ts || '').replace('T', ' ').slice(0, 16); }
+  function fmtScore(s) { return Number(s || 0).toFixed(1); }
+  function projectOf(id) { return state.projects.find((p) => p.id === id) || { id: id, name: id, color: 'var(--muted)' }; }
+  function isTodayNow(task) { return !!task.is_today && task.today_date === state.serverToday; }
+  function dueLabel(task) {
+    if (task.days_left === null || task.days_left === undefined) return t('no_deadline');
+    const n = task.days_left;
+    if (n < 0) return t('due_overdue', { n: -n }); if (n === 0) return t('due_today'); if (n === 1) return t('due_tomorrow');
+    return t('due_in_days', { n: n });
+  }
+  function dueClass(task) { if (task.days_left === null || task.days_left === undefined) return ''; if (task.days_left < 0) return 'overdue'; if (task.days_left === 0) return 'today'; if (task.days_left === 1) return 'tomorrow'; return ''; }
+  function whoLabel(task) { return task.who === 'delegate' ? (task.delegate_to ? t('who_delegate_to', { name: task.delegate_to }) : t('who_delegate')) : t('who_me'); }
+  function groupName(g) { return t('group_' + g); }
+  const busyKeys = new Set();
+  async function guarded(fn, key) {
+    const k = key || fn.toString();  // одинаковое действие не запускается дважды; разные — независимы
+    if (busyKeys.has(k)) return;
+    busyKeys.add(k);
+    try { return await fn(); } finally { busyKeys.delete(k); }
+  }
+
+  async function api(method, path, body) {
+    let res;
+    try { res = await fetch(path, { method: method, headers: body !== undefined ? { 'Content-Type': 'application/json' } : {}, body: body !== undefined ? JSON.stringify(body) : undefined }); }
+    catch (e) { throw { status: 0, data: { error: 'network', message: t('error_network') } }; }
+    let data = null; try { data = await res.json(); } catch (e) { data = { error: 'bad_response', message: res.statusText }; }
+    if (!res.ok) throw { status: res.status, data: data || {} };
+    return data;
+  }
+  let toastTimer = null;
+  function toast(msg, kind, action) {
+    const old = $('.toast'); if (old) old.remove();
+    const node = el('div', { class: 'toast ' + (kind || '') }, el('span', { text: msg }), action ? el('button', { text: action.label, onclick: () => { node.remove(); action.fn(); } }) : null);
+    document.body.appendChild(node); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.remove(), action ? 6000 : 3200);
+  }
+  function showError(err) {
+    const d = (err && err.data) || {}; let msg = d.message || d.error || String(err);
+    if (d.error === 'validation' && d.field) msg = t('settings_invalid', { field: d.field });
+    if (d.error === 'not_empty') msg = t('project_not_empty');
+    toast(t('error_generic', { message: msg }), 'err');
+  }
+  function modal(title, body, buttons, opts) {
+    opts = opts || {};
+    const box = el('div', { class: 'modal ' + (opts.cls || '') }, title ? el('h3', { text: title }) : null, body);
+    const overlay = el('div', { class: 'overlay', onclick: (ev) => { if (ev.target === overlay && !opts.sticky) close(); } }, box);
+    if (buttons && buttons.length) {
+      const bar = el('div', { class: 'bar' });
+      buttons.forEach((b) => bar.appendChild(el('button', { class: 'btn ' + (b.cls || ''), text: b.label, onclick: () => { if (b.onclick) b.onclick(); if (!b.keep) close(); } })));
+      box.appendChild(bar);
+    }
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();  // клавиши сразу идут в модалку
+    document.body.appendChild(overlay);
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } else if (opts.onkey) opts.onkey(ev); };
+    document.addEventListener('keydown', onKey);
+    const focusFirst = () => { const f = box.querySelector('input, textarea, button'); if (f && !box.contains(document.activeElement)) f.focus(); };
+    focusFirst(); setTimeout(focusFirst, 0);
+    function close() { overlay.remove(); document.removeEventListener('keydown', onKey); if (opts.onclose) opts.onclose(); }
+    return { close: close, box: box };
+  }
+
+  // ------------------------------------------------------------ навигация
+  function parseHash() {
+    const h = (location.hash || '#/today').replace(/^#\/?/, '').split('/');
+    return { view: h[0] || 'today', arg: h[1] ? decodeURIComponent(h[1]) : null };
+  }
+  function go(view, arg) { location.hash = '#/' + view + (arg ? '/' + encodeURIComponent(arg) : ''); }
+  window.addEventListener('hashchange', async () => {
+    const pend = state.pendingComposer; state.pendingComposer = null;
+    state.route = parseHash(); state.chip = ''; closeComposer();
+    await render();
+    if (pend) openComposer(pend);
+  });
+
+  async function refreshSidebar() {
+    try {
+      const [board, today] = await Promise.all([api('GET', '/api/board'), api('GET', '/api/today')]);
+      state.counts = {}; Object.keys(board.groups || {}).forEach((g) => { state.counts[g] = board.groups[g].count; });
+      state.review = (board.review || []).length;
+      state.today = { n: today.tasks.length, limit: today.limit };
+      state.serverToday = today.date;
+      if (board.projects) state.projects = board.projects.filter((p) => !p.archived);
+      else { const pr = await api('GET', '/api/projects'); state.projects = pr.projects.filter((p) => !p.archived); }
+    } catch (e) { /* боковая панель не критична */ }
+    renderSidebar();
+  }
+  function renderSidebar() {
+    const side = clear($('#sidebar'));
+    const r = state.route;
+    side.appendChild(el('div', { class: 'brand' }, el('div', { class: 'logo' }, el('i')), el('div', {}, el('h1', { text: t('app_title') }), el('div', { class: 'date', text: state.serverToday ? fmtDay(state.serverToday, { weekday: 'long', day: 'numeric', month: 'long' }) : '' }))));
+    side.appendChild(el('button', { class: 'btn-add', onclick: () => openComposer(), title: 'q' }, el('span', { class: 'plus', text: '+' }), t('btn_add_task')));
+    const nav = (view, arg, icon, label, cnt, cntCls) => el('button', { class: 'nav-item' + (r.view === view && (arg || null) === (r.arg || null) ? ' active' : ''), onclick: () => { go(view, arg); closeNav(); } },
+      el('span', { class: 'ic', text: icon }), el('span', { class: 'grow', text: label }), cnt !== undefined && cnt !== null && cnt !== '' ? el('span', { class: 'cnt ' + (cntCls || ''), text: String(cnt) }) : null);
+    side.appendChild(nav('today', null, '☀', t('nav_today'), state.today.n + '/' + state.today.limit));
+    side.appendChild(nav('inbox', null, '📥', t('nav_inbox'), state.counts.inbox || ''));
+    side.appendChild(nav('upcoming', null, '📅', t('nav_upcoming'), ''));
+    if (state.review > 0) side.appendChild(nav('review', null, '↻', t('nav_review'), state.review, 'alert'));
+    side.appendChild(el('div', { class: 'nav-sec', text: t('sidebar_groups') }));
+    GROUPS.forEach((g) => side.appendChild(el('button', { class: 'nav-item' + (r.view === 'group' && r.arg === g ? ' active' : ''), onclick: () => { go('group', g); closeNav(); } },
+      el('span', { class: 'ic' }, gdot(g)), el('span', { class: 'grow', text: groupName(g) }), el('span', { class: 'cnt', text: String(state.counts[g] || 0) }))));
+    side.appendChild(el('div', { class: 'nav-sec' }, t('sidebar_projects'), el('button', { text: '+', title: t('btn_add_project'), onclick: () => newProjectDialog() })));
+    state.projects.forEach((p) => side.appendChild(el('button', { class: 'nav-item' + (r.view === 'project' && r.arg === p.id ? ' active' : ''), onclick: () => { go('project', p.id); closeNav(); } },
+      el('span', { class: 'ic' }, dot(p.color)), el('span', { class: 'grow', text: p.name }), el('span', { class: 'cnt', text: String(p.open_count || 0) }))));
+    const foot = el('div', { class: 'side-foot' });
+    foot.appendChild(nav('settings', null, '⚙', t('nav_settings'), ''));
+    foot.appendChild(el('div', { class: 'lang-toggle' }, ['ru', 'de'].map((l) => el('button', { class: l === state.lang ? 'on' : '', text: l.toUpperCase(), onclick: () => setLang(l) }))));
+    foot.appendChild(el('div', { class: 'kbd', text: t('kbd_hint') }));
+    side.appendChild(foot);
+  }
+  function closeNav() { $('#app').classList.remove('nav-open'); }
+  $('#menu-btn').addEventListener('click', () => $('#app').classList.toggle('nav-open'));
+  $('#nav-overlay').addEventListener('click', closeNav);
+
+  async function setLang(l) {
+    try { const saved = await api('PUT', '/api/settings', { language: l }); await loadLang(saved.language); renderSidebar(); render(); } catch (e) { showError(e); }
+  }
+  async function loadLang(lang) {
+    const d = await api('GET', '/api/i18n?lang=' + encodeURIComponent(lang));
+    state.L = d.strings || d; state.lang = d.lang || lang; document.documentElement.lang = state.lang; document.title = t('app_title');
+  }
+  function applyTheme() { document.documentElement.dataset.theme = (state.settings && state.settings.theme) === 'light' ? 'light' : 'dark'; }
+
+  // ------------------------------------------------------------ действия над задачами
+  async function afterChange() { await refreshSidebar(); await render(); if (state.detailId) openDetail(state.detailId, true); }
+  function markDone(task, btn) {
+    return guarded(async () => {
+      const reopen = task.status === 'done';
+      if (btn) btn.classList.add('checking');
+      try {
+        await api('POST', '/api/tasks/' + task.id + (reopen ? '/reopen' : '/done'));
+        toast(t(reopen ? 'reopen_toast' : 'done_toast', { title: task.title }), 'ok', reopen ? null : { label: t('undo'), fn: () => guarded(async () => { try { await api('POST', '/api/tasks/' + task.id + '/reopen'); await afterChange(); } catch (e) { showError(e); } }) });
+        await afterChange();
+      } catch (e) { showError(e); }
+    }, 'done:' + task.id);
+  }
+  function deleteTask(task) {
+    if (!window.confirm(t('confirm_delete', { title: task.title }))) return;
+    return guarded(async () => { try { await api('DELETE', '/api/tasks/' + task.id); if (state.detailId === task.id) closeDetail(); await afterChange(); } catch (e) { showError(e); } });
+  }
+  function moveTask(task) {
+    const body = el('div', { class: 'opts' }); let m;
+    GROUPS.forEach((g) => body.appendChild(el('button', { class: 'opt' + (g === task.group ? ' sel' : ''), disabled: g === task.group, onclick: () => guarded(async () => {
+      try { await api('POST', '/api/tasks/' + task.id + '/move', { group: g }); toast(t('moved_toast', { group: groupName(g) }), 'ok'); m.close(); await afterChange(); } catch (e) { showError(e); }
+    }) }, gdot(g), el('span', { class: 'grow' }, groupName(g)), el('span', { class: 'muted small', text: t('group_' + g + '_desc') }))));
+    m = modal(t('move_title', { title: task.title }), body, [{ label: t('btn_cancel') }]);
+  }
+  function moveProject(task) {
+    const body = el('div', { class: 'opts' }); let m;
+    state.projects.forEach((p) => body.appendChild(el('button', { class: 'opt' + (p.id === task.project ? ' sel' : ''), disabled: p.id === task.project, onclick: () => guarded(async () => {
+      try { await api('PATCH', '/api/tasks/' + task.id, { project: p.id }); m.close(); await afterChange(); } catch (e) { showError(e); }
+    }) }, dot(p.color), p.name)));
+    m = modal(t('move_project_title', { title: task.title }), body, [{ label: t('btn_cancel') }]);
+  }
+  function addToToday(task, replaceId) {
+    return guarded(async () => {
+      const body = { task_id: task.id }; if (replaceId) body.replace_id = replaceId;
+      try { await api('POST', '/api/today', body); await afterChange(); return true; }
+      catch (e) { if (e.status === 409 && e.data && e.data.error === 'day_full') { offerReplace(task, e.data); return false; } showError(e); return false; }
+    });
+  }
+  function offerReplace(task, info) {
+    const open = (info.tasks || []).filter((x) => x.status === 'open');
+    if (!open.length) { toast(t('today_limit_done', { limit: info.limit }), 'ok'); return; }
+    const list = el('div', { class: 'opts' }); let m;
+    open.forEach((x) => list.appendChild(el('button', { class: 'opt', onclick: async () => { m.close(); await addToToday(task, x.id); } }, el('div', { class: 'grow' }, x.title, el('div', { class: 'muted small', text: fmtScore(x.score) + ' · ' + dueLabel(x) })))));
+    m = modal(t('today_full_title', { limit: info.limit }), el('div', {}, el('p', { class: 'muted', text: t('today_full_text', { limit: info.limit }) }), el('p', { text: t('today_replace_with', { title: task.title }) }), list), [{ label: t('btn_cancel') }]);
+  }
+  function removeFromToday(task) { return guarded(async () => { try { await api('DELETE', '/api/today/' + task.id); await afterChange(); } catch (e) { showError(e); } }); }
+
+  // ------------------------------------------------------------ строка задачи
+  function badges(task, opts) {
+    const out = [];
+    if (opts.showGroup && task.group !== 'inbox') out.push(el('span', { class: 'badge' }, gdot(task.group), ' ', groupName(task.group)));
+    if (isTodayNow(task) && !opts.noToday) out.push(el('span', { class: 'badge ok', text: t('today_badge') }));
+    if (task.group_manual) out.push(el('span', { class: 'badge', text: t('manual_badge') }));
+    if (task.carry_count > 0) out.push(el('span', { class: 'badge warn', text: t('carried_badge', { n: task.carry_count }) }));
+    if (task.needs_review) out.push(el('span', { class: 'badge alert', text: t('review_badge') }));
+    if (task.depends_on) out.push(el('span', { class: 'badge', text: t('depends_prefix', { text: task.depends_on }) }));
+    return out;
+  }
+  function taskRow(task, opts) {
+    opts = opts || {};
+    const p = projectOf(task.project);
+    const inbox = task.group === 'inbox';
+    const meta = el('div', { class: 'meta' });
+    if (!inbox) {
+      meta.appendChild(el('span', { class: 'due ' + dueClass(task), text: dueLabel(task) }));
+      meta.appendChild(el('span', { text: t('dur_' + task.duration) }));
+      meta.appendChild(el('span', { text: fmtScore(task.score) }));
+      if (task.who === 'delegate') meta.appendChild(el('span', { text: whoLabel(task) }));
+    }
+    if (opts.showProject !== false) meta.appendChild(el('span', { class: 'proj' }, dot(p.color), p.name));
+    append(meta, badges(task, opts));
+    const check = el('button', { class: 'check', style: { '--c': GROUP_COLOR[task.group] || 'var(--muted)' }, title: task.status === 'done' ? t('btn_undo') : t('btn_done'), onclick: (ev) => { ev.stopPropagation(); markDone(task, ev.currentTarget); } }, '✓');
+    const actions = el('div', { class: 'actions' });
+    if (task.status === 'open') {
+      if (inbox) actions.appendChild(el('button', { class: 'btn small primary quick', text: t('inbox_evaluate'), onclick: (ev) => { ev.stopPropagation(); startWizard({ mode: 'reeval', task: task }); } }));
+      if (task.group === 'now' && !isTodayNow(task) && opts.allowToday !== false) actions.appendChild(el('button', { class: 'ib primary', title: t('btn_to_today'), text: '☆', onclick: (ev) => { ev.stopPropagation(); addToToday(task); } }));
+      if (isTodayNow(task)) actions.appendChild(el('button', { class: 'ib', title: t('btn_remove_today'), text: '★', onclick: (ev) => { ev.stopPropagation(); removeFromToday(task); } }));
+      if (!inbox) actions.appendChild(el('button', { class: 'ib', title: t('btn_move'), text: '⇄', onclick: (ev) => { ev.stopPropagation(); moveTask(task); } }));
+      actions.appendChild(el('button', { class: 'ib', title: t('btn_project'), text: '📁', onclick: (ev) => { ev.stopPropagation(); moveProject(task); } }));
+      actions.appendChild(el('button', { class: 'ib', title: t('btn_reeval'), text: '↻', onclick: (ev) => { ev.stopPropagation(); startWizard({ mode: 'reeval', task: task }); } }));
+    }
+    actions.appendChild(el('button', { class: 'ib danger', title: t('btn_delete'), text: '🗑', onclick: (ev) => { ev.stopPropagation(); deleteTask(task); } }));
+    const row = el('div', { class: 'task' + (task.status === 'done' ? ' done' : '') + (opts.big ? ' big' : '') + (state.detailId === task.id ? ' selected' : ''), 'data-id': task.id },
+      opts.number ? el('span', { class: 'num', text: String(opts.number) }) : null, check,
+      el('div', { class: 'body', onclick: () => openDetail(task.id) }, el('div', { class: 'title', text: task.title }), task.note ? el('div', { class: 'note', text: task.note }) : null, meta), actions);
+    return row;
+  }
+  function eventRow(ev) {
+    const time = ev.all_day ? t('all_day') : (fmtTime(ev.start) + (ev.end && !ev.all_day ? '–' + fmtTime(ev.end) : ''));
+    return el('div', { class: 'event' }, el('span', { class: 'time', text: time }), el('div', {}, el('div', { class: 'ttl', text: ev.summary || '—' }), ev.location ? el('div', { class: 'loc', text: ev.location }) : null));
+  }
+  function skeleton(n) { const w = el('div'); for (let i = 0; i < (n || 4); i++) w.appendChild(el('div', { class: 'skeleton' })); return w; }
+
+  // ------------------------------------------------------------ композер (быстрое добавление)
+  function openComposer(preset) {
+    preset = preset || {};
+    if (state.route.view === 'settings') { state.pendingComposer = preset; go('inbox'); return; }  // откроем после перехода
+    state.composer = { title: preset.title || '', note: '', project: preset.project || (state.route.view === 'project' && state.route.arg) || (state.settings && state.settings.default_project) || 'praxis' };
+    renderComposer();
+  }
+  function closeComposer() { state.composer = null; const c = $('#composer'); if (c) c.remove(); }
+  function renderComposer() {
+    const slot = $('#composer-slot'); const old = $('#composer');
+    const c = state.composer;
+    if (old) old.remove();
+    if (!c) return;
+    const title = el('input', { class: 'ttl', type: 'text', maxlength: '200', placeholder: t('composer_placeholder'), value: c.title });
+    const note = el('textarea', { rows: '1', placeholder: t('composer_note') }); note.value = c.note;
+    const sel = el('select', { onchange: (ev) => { c.project = ev.target.value; } }, state.projects.map((p) => el('option', { value: p.id, selected: p.id === c.project }, p.name)));
+    const submit = (mode) => {
+      c.title = title.value.trim(); c.note = note.value.trim();
+      if (!c.title) { toast(t('add_name_required'), 'err'); title.focus(); return; }
+      if (mode === 'inbox') return guarded(async () => {
+        try { const r = await api('POST', '/api/tasks', { title: c.title, note: c.note, project: c.project }); toast(t('added_inbox', { title: r.task.title }), 'ok'); closeComposer(); await afterChange(); }
+        catch (e) { showError(e); }
+      });
+      startWizard({ mode: 'new', title: c.title, note: c.note, project: c.project });
+    };
+    title.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(ev.shiftKey ? 'inbox' : 'evaluate'); } if (ev.key === 'Escape') closeComposer(); });
+    note.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.altKey) { ev.preventDefault(); submit(ev.shiftKey ? 'inbox' : 'evaluate'); } if (ev.key === 'Escape') closeComposer(); });
+    const box = el('div', { class: 'composer', id: 'composer' }, title, note,
+      el('div', { class: 'bar' }, sel, el('span', { class: 'hint grow', text: t('composer_hint') }),
+        el('button', { class: 'btn ghost small', text: t('btn_cancel'), onclick: closeComposer }),
+        el('button', { class: 'btn small', text: t('composer_inbox'), onclick: () => submit('inbox') }),
+        el('button', { class: 'btn small primary', text: t('composer_evaluate'), onclick: () => submit('evaluate') })));
+    slot.appendChild(box);
+    setTimeout(() => title.focus(), 0);
+  }
+
+  // ------------------------------------------------------------ мастер (модальный)
+  const STEPS = [
+    { key: 'importance', q: 'q_importance', opts: [1, 2, 3, 4, 5].map((n) => ({ v: n, l: 'imp_' + n })) },
+    { key: 'due', q: 'q_due', opts: ['today', 'tomorrow', 'week', 'month', 'none'].map((v) => ({ v: v, l: 'due_opt_' + v })) },
+    { key: 'consequence', q: 'q_consequence', opts: ['none', 'unpleasant', 'serious'].map((v) => ({ v: v, l: 'cons_' + v })) },
+    { key: 'who', q: 'q_who', opts: [{ v: 'me', l: 'who_opt_me' }, { v: 'delegate', l: 'who_opt_delegate', input: 'delegate_to', label: 'delegate_to_label' }] },
+    { key: 'duration', q: 'q_duration', opts: ['5m', '30m', '2h', 'half_day'].map((v) => ({ v: v, l: 'dur_' + v })) },
+    { key: 'depends', q: 'q_depends', opts: [{ v: 'no', l: 'dep_no' }, { v: 'yes', l: 'dep_yes', input: 'depends_on', label: 'depends_placeholder' }] }
+  ];
+  function startWizard(o) {
+    const task = o.task || null;
+    const answers = task && task.group !== 'inbox' ? { importance: task.importance, due: task.due, consequence: task.consequence, who: task.who, delegate_to: task.delegate_to || '', duration: task.duration, depends: task.depends_on ? 'yes' : 'no', depends_on: task.depends_on || '' } : {};
+    state.wiz = { mode: o.mode, task: task, title: task ? task.title : o.title, note: task ? task.note : (o.note || ''), project: task ? task.project : o.project, step: 1, answers: answers };
+    const body = el('div', { class: 'wizard' });
+    const m = modal(null, body, null, { sticky: true, onkey: wizardKey, onclose: () => { state.wiz = null; } });
+    state.wiz.modal = m; state.wiz.body = body;
+    renderWizard();
+  }
+  function wizardKey(ev) {
+    const w = state.wiz; if (!w || w.step > 6) return;
+    if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA')) return;
+    const step = STEPS[w.step - 1]; const n = parseInt(ev.key, 10);
+    if (n >= 1 && n <= step.opts.length) { ev.preventDefault(); pickOption(step, step.opts[n - 1]); }
+    else if (ev.key === 'Backspace' && w.step > 1) { ev.preventDefault(); w.step--; renderWizard(); }
+  }
+  function pickOption(step, o) {
+    const w = state.wiz; w.answers[step.key] = o.v;
+    if (o.input) { renderWizard(); return; }
+    if (step.key === 'who') w.answers.delegate_to = ''; if (step.key === 'depends') w.answers.depends_on = '';
+    w.step++; renderWizard();
+  }
+  function renderWizard() {
+    const w = state.wiz; if (!w) return; const box = clear(w.body);
+    box.appendChild(el('div', { class: 'ttl', text: t('wizard_title', { title: w.title }) }));
+    if (w.step <= 6) {
+      const step = STEPS[w.step - 1];
+      box.appendChild(el('div', { class: 'step', text: t('wizard_step', { n: w.step }) }));
+      box.appendChild(el('div', { class: 'progress' }, el('div', { style: { width: Math.round(w.step / 6 * 100) + '%' } })));
+      box.appendChild(el('div', { class: 'q', text: t(step.q) }));
+      const opts = el('div', { class: 'opts' }); let extra = null; const cur = w.answers[step.key];
+      step.opts.forEach((o, i) => {
+        opts.appendChild(el('button', { class: 'opt' + (String(cur) === String(o.v) ? ' sel' : ''), onclick: () => pickOption(step, o) }, el('kbd', { text: String(i + 1) }), el('span', { class: 'grow', text: t(o.l) })));
+        if (o.input && String(cur) === String(o.v)) {
+          const inp = el('input', { class: 'wide', type: 'text', maxlength: step.key === 'who' ? '200' : '500', placeholder: t(o.label), value: w.answers[o.input] || '' });
+          inp.addEventListener('input', () => { w.answers[o.input] = inp.value; });
+          inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); w.step++; renderWizard(); } });
+          extra = el('div', {}, inp, el('div', { class: 'bar' }, el('button', { class: 'btn primary', text: t('btn_next'), onclick: () => { w.step++; renderWizard(); } })));
+          setTimeout(() => inp.focus(), 0);
+        }
+      });
+      box.appendChild(opts); if (extra) box.appendChild(extra);
+      box.appendChild(el('div', { class: 'bar', style: { justifyContent: 'space-between' } },
+        el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), disabled: w.step === 1, onclick: () => { w.step--; renderWizard(); } }),
+        el('button', { class: 'btn ghost', text: t('btn_cancel'), onclick: () => w.modal.close() })));
+      return;
+    }
+    renderSummary(box);
+  }
+  function wizardAnswers() {
+    const a = state.wiz.answers;
+    return { importance: a.importance, due: a.due, consequence: a.consequence, who: a.who, delegate_to: a.who === 'delegate' ? (a.delegate_to || '') : '', duration: a.duration, depends_on: a.depends === 'yes' ? (a.depends_on || '') : '' };
+  }
+  async function renderSummary(box) {
+    const w = state.wiz; const answers = wizardAnswers();
+    const panel = el('div', { class: 'summary' }, el('div', { class: 'muted', text: t('loading') })); box.appendChild(panel);
+    let pv; try { pv = await api('POST', '/api/tasks/preview', { answers: answers }); } catch (e) { showError(e); w.step = 1; renderWizard(); return; }
+    clear(panel);
+    panel.appendChild(el('div', { class: 'step', text: t('summary_title') }));
+    panel.appendChild(el('div', { class: 'grp' }, gdot(pv.group), groupName(pv.group)));
+    panel.appendChild(el('div', { class: 'sc', text: fmtScore(pv.score) }));
+    panel.appendChild(el('div', { class: 'muted small', text: t('group_' + pv.group + '_desc') }));
+    const hints = el('div', { class: 'hints' });
+    (pv.hints || []).forEach((h) => hints.appendChild(el('div', { text: h === 'delegate' ? (answers.delegate_to ? t('hint_delegate', { name: answers.delegate_to }) : t('hint_delegate_nobody')) : h === 'waiting' ? t('hint_waiting', { text: answers.depends_on }) : t('hint_' + h) })));
+    if (hints.childNodes.length) panel.appendChild(hints);
+    panel.appendChild(el('div', { class: 'bar', style: { justifyContent: 'center' } },
+      el('button', { class: 'btn ghost', text: '← ' + t('btn_back'), onclick: () => { w.step = 6; renderWizard(); } }),
+      el('button', { class: 'btn primary', text: t('btn_save'), onclick: saveWizard })));
+    setTimeout(() => { const b = panel.querySelector('.btn.primary'); if (b) b.focus(); }, 0);
+  }
+  function saveWizard() {
+    return guarded(async () => {
+      const w = state.wiz; if (!w) return; const answers = wizardAnswers();
+      try {
+        if (w.mode === 'reeval') {
+          const r = await api('POST', '/api/tasks/' + w.task.id + '/evaluate', { answers: answers });
+          toast(t('summary_reeval_saved', { group: groupName(r.task.group), score: fmtScore(r.task.score) }), 'ok');
+          w.modal.close(); await afterChange();
+          if (r.task.group === 'now' && state.today.n < state.today.limit) {
+            modal(t('summary_saved_today_offer'), el('p', { text: r.task.title }), [{ label: t('btn_cancel') }, { label: t('btn_to_today'), cls: 'primary', onclick: () => addToToday(r.task) }]);
+          }
+          return;
+        }
+        const r = await api('POST', '/api/tasks', { title: w.title, note: w.note, project: w.project, answers: answers });
+        const task = r.task; w.modal.close(); closeComposer();
+        toast(t('summary_saved', { title: task.title, group: groupName(task.group), score: fmtScore(task.score) }), 'ok');
+        await afterChange();
+        if (task.group === 'now' && state.today.n < state.today.limit) {
+          modal(t('summary_saved_today_offer'), el('p', { text: task.title }), [{ label: t('btn_cancel') }, { label: t('btn_to_today'), cls: 'primary', onclick: () => addToToday(task) }]);
+        }
+      } catch (e) { showError(e); }
+    });
+  }
+
+  // ------------------------------------------------------------ панель задачи
+  async function openDetail(id, silent) {
+    state.detailId = id;
+    let task, journal;
+    try { const r = await Promise.all([api('GET', '/api/tasks/' + id), api('GET', '/api/journal?task_id=' + id + '&limit=15')]); task = r[0].task; journal = r[1].entries || []; }
+    catch (e) { if (!silent) showError(e); closeDetail(); return; }
+    const d = clear($('#detail')); $('#app').classList.add('detail-open');
+    document.querySelectorAll('.task.selected').forEach((n) => n.classList.remove('selected'));
+    const sel = document.querySelector('.task[data-id="' + id + '"]'); if (sel) sel.classList.add('selected');
+    const inner = el('div', { class: 'detail-inner' });
+    const title = el('input', { class: 'ttl', type: 'text', maxlength: '200', value: task.title });
+    const saveTitle = () => guarded(async () => { const v = title.value.trim(); if (!v || v === task.title) { title.value = task.title; return; } try { await api('PATCH', '/api/tasks/' + id, { title: v }); task.title = v; toast(t('saved'), 'ok'); await refreshSidebar(); await render(); } catch (e) { showError(e); } });
+    title.addEventListener('blur', saveTitle); title.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') title.blur(); });
+    const note = el('textarea', { class: 'note', placeholder: t('detail_note_placeholder') }); note.value = task.note || '';
+    note.addEventListener('blur', () => guarded(async () => { const v = note.value.trim(); if (v === (task.note || '')) return; try { await api('PATCH', '/api/tasks/' + id, { note: v }); task.note = v; toast(t('saved'), 'ok'); await render(); } catch (e) { showError(e); } }));
+    inner.appendChild(el('div', { class: 'top' }, el('button', { class: 'check', style: { '--c': GROUP_COLOR[task.group] || 'var(--muted)', position: 'static' }, text: '✓', onclick: (ev) => markDone(task, ev.currentTarget) }), el('div', { class: 'grow' }), el('button', { class: 'ib', text: '✕', title: t('btn_close'), onclick: closeDetail })));
+    inner.appendChild(title); inner.appendChild(note);
+    const p = projectOf(task.project);
+    const kv = el('div', { class: 'kv' },
+      el('span', { class: 'k', text: t('detail_project') }), el('button', { class: 'link-btn', style: { textAlign: 'left' }, onclick: () => moveProject(task) }, dot(p.color), ' ', p.name),
+      el('span', { class: 'k', text: t('detail_group') }), el('span', {}, gdot(task.group), ' ', groupName(task.group), task.group_manual ? ' · ' + t('manual_badge') : ''),
+      task.group !== 'inbox' ? el('span', { class: 'k', text: t('detail_score') }) : null, task.group !== 'inbox' ? el('span', { text: fmtScore(task.score) }) : null);
+    inner.appendChild(kv);
+    const act = el('div', { class: 'row wrap', style: { marginTop: '6px' } });
+    if (task.status === 'open') {
+      if (task.group === 'inbox') act.appendChild(el('button', { class: 'btn primary small', text: t('inbox_evaluate'), onclick: () => startWizard({ mode: 'reeval', task: task }) }));
+      else act.appendChild(el('button', { class: 'btn small' + (task.needs_review ? ' primary' : ''), text: '↻ ' + t('btn_reeval'), onclick: () => startWizard({ mode: 'reeval', task: task }) }));
+      if (task.group === 'now' && !isTodayNow(task)) act.appendChild(el('button', { class: 'btn small', text: '☆ ' + t('btn_to_today'), onclick: () => addToToday(task) }));
+      if (isTodayNow(task)) act.appendChild(el('button', { class: 'btn small', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }));
+      if (task.group !== 'inbox') act.appendChild(el('button', { class: 'btn small', text: '⇄ ' + t('btn_move'), onclick: () => moveTask(task) }));
+    } else act.appendChild(el('button', { class: 'btn small', text: t('btn_undo'), onclick: () => markDone(task) }));
+    act.appendChild(el('button', { class: 'btn small ghost danger', text: t('btn_delete'), onclick: () => deleteTask(task) }));
+    inner.appendChild(act);
+    if (task.group === 'inbox') inner.appendChild(el('p', { class: 'muted small', text: t('detail_inbox_hint') }));
+    else {
+      const ans = el('div', { class: 'block' }, el('h4', { text: t('detail_answers') }));
+      ans.appendChild(el('div', { class: 'kv' },
+        el('span', { class: 'k', text: t('a_importance') }), el('span', { text: t('imp_' + task.importance) }),
+        el('span', { class: 'k', text: t('a_due') }), el('span', { text: t('due_opt_' + task.due) + (task.due_date ? ' · ' + task.due_date : '') }),
+        el('span', { class: 'k', text: t('a_consequence') }), el('span', { text: t('cons_' + task.consequence) }),
+        el('span', { class: 'k', text: t('a_who') }), el('span', { text: whoLabel(task) }),
+        el('span', { class: 'k', text: t('a_duration') }), el('span', { text: t('dur_' + task.duration) }),
+        el('span', { class: 'k', text: t('a_depends') }), el('span', { text: task.depends_on || t('a_none') })));
+      inner.appendChild(ans);
+    }
+    const j = el('div', { class: 'block' }, el('h4', { text: t('detail_journal') }));
+    journal.slice().reverse().forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); j.appendChild(el('div', { class: 'jrow' }, el('span', { text: fmtTs(e.ts) }), el('span', {}, el('b', { text: t('ev_' + e.event) }), ch ? ' ' + ch : ''))); });
+    inner.appendChild(j);
+    d.appendChild(inner);
+  }
+  function closeDetail() { state.detailId = null; $('#app').classList.remove('detail-open'); clear($('#detail')); document.querySelectorAll('.task.selected').forEach((n) => n.classList.remove('selected')); }
+
+  // ------------------------------------------------------------ виды
+  function head(title, sub, tools) { return el('div', { class: 'view-head' }, el('div', {}, el('h2', { text: title }), sub ? el('div', { class: 'sub', text: sub }) : null), el('div', { class: 'tools' }, tools || [])); }
+  function sortSelect(onchange) { return el('select', { onchange: (ev) => { state.sort = ev.target.value; onchange(); } }, ['score', 'due', 'created'].map((s) => el('option', { value: s, selected: s === state.sort }, t('sort_' + s)))); }
+  function sectionTitle(text, cnt) { return el('div', { class: 'section' }, el('h3', { text: text }), cnt !== undefined ? el('span', { class: 'cnt', text: String(cnt) }) : null); }
+  function listOf(tasks, opts) { const l = el('div', { class: 'list' + (opts && opts.numbered ? ' numbered' : '') }); tasks.forEach((tk, i) => l.appendChild(taskRow(tk, Object.assign({}, opts, { number: opts && opts.numbered ? i + 1 : null })))); return l; }
+
+  async function render() {
+    const main = $('#main'); const r = state.route; clear(main); main.appendChild(skeleton(3));
+    try {
+      if (r.view === 'today') await viewToday(main);
+      else if (r.view === 'inbox') await viewInbox(main);
+      else if (r.view === 'upcoming') await viewUpcoming(main);
+      else if (r.view === 'review') await viewReview(main);
+      else if (r.view === 'group') await viewGroup(main, r.arg);
+      else if (r.view === 'project') await viewProject(main, r.arg);
+      else if (r.view === 'settings') await viewSettings(main);
+      else { go('today'); return; }
+    } catch (e) { clear(main); main.appendChild(el('div', { class: 'empty', text: (e.data && e.data.message) || t('error_network') })); }
+    renderSidebar();
+  }
+
+  async function viewToday(main) {
+    const d = await api('GET', '/api/today'); clear(main);
+    state.serverToday = d.date; state.today = { n: d.tasks.length, limit: d.limit };
+    main.appendChild(head(t('nav_today'), fmtDay(d.date, { weekday: 'long', day: 'numeric', month: 'long' }), [el('span', { class: 'counter', text: t('today_counter', { n: d.tasks.length, limit: d.limit }) })]));
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    if (d.tasks.length > d.limit) main.appendChild(el('div', { class: 'badge alert', style: { marginBottom: '10px' }, text: t('today_over_limit', { limit: d.limit }) }));
+    main.appendChild(sectionTitle(t('today_section_tasks')));
+    if (d.tasks.length) main.appendChild(listOf(d.tasks, { numbered: true, big: true, noToday: true }));
+    const free = d.free_slots;
+    if (free > 0) {
+      const pick = el('div', { class: 'list' });
+      const btn = el('button', { class: 'add-row', onclick: () => { pick.classList.toggle('hidden'); } }, el('span', { class: 'plus', text: '+' }), t('today_pick'), el('span', { class: 'faint small', text: ' · ' + t('today_pick_hint') }));
+      main.appendChild(btn);
+      if (d.candidates.length) d.candidates.forEach((c) => pick.appendChild(taskRow(c, {}))); else pick.appendChild(el('div', { class: 'empty', text: t('today_no_candidates') }));
+      if (!d.tasks.length) pick.classList.remove('hidden'); else pick.classList.add('hidden');
+      main.appendChild(pick);
+    } else if ((d.pool || []).length) {
+      const pool = el('div', { class: 'list hidden' });
+      main.appendChild(el('button', { class: 'add-row', onclick: () => pool.classList.toggle('hidden') }, el('span', { class: 'plus', text: '⇄' }), t('today_replace'), el('span', { class: 'faint small', text: ' · ' + t('today_full_short') })));
+      d.pool.forEach((c) => pool.appendChild(taskRow(c, {}))); main.appendChild(pool);
+    }
+    const openCount = d.tasks.filter((x) => x.status === 'open').length;
+    if (d.tasks.length && !openCount) main.appendChild(el('p', { class: 'muted', style: { textAlign: 'center' }, text: t('today_all_done') }));
+    // календарь
+    const cal = d.calendar || { configured: false };
+    main.appendChild(sectionTitle(t('today_section_calendar'), cal.configured && d.events ? d.events.length : undefined));
+    if (!cal.configured) main.appendChild(el('div', { class: 'empty' }, el('button', { class: 'link-btn', text: t('today_calendar_connect'), onclick: () => go('settings') })));
+    else {
+      if (cal.error) main.appendChild(el('div', { class: 'badge alert', text: t('calendar_error') }));
+      if (!(d.events || []).length) main.appendChild(el('div', { class: 'muted small', style: { padding: '6px 8px' }, text: t('today_no_events') }));
+      (d.events || []).forEach((ev) => main.appendChild(eventRow(ev)));
+    }
+  }
+
+  async function viewInbox(main) {
+    const d = await api('GET', '/api/inbox'); clear(main);
+    main.appendChild(head(t('nav_inbox'), t('inbox_desc'), [el('span', { class: 'counter', text: String(d.tasks.length) })]));
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    if (!d.tasks.length) main.appendChild(el('div', { class: 'empty', text: t('inbox_empty') }));
+    else main.appendChild(listOf(d.tasks, {}));
+    main.appendChild(el('button', { class: 'add-row', onclick: () => openComposer() }, el('span', { class: 'plus', text: '+' }), t('btn_add_task')));
+  }
+
+  async function viewUpcoming(main) {
+    const d = await api('GET', '/api/upcoming?days=7'); clear(main);
+    main.appendChild(head(t('nav_upcoming'), t('upcoming_desc')));
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    if ((d.overdue || []).length) { main.appendChild(el('div', { class: 'day-head' }, el('h3', { text: t('upcoming_overdue') }), el('span', { class: 'today', text: String(d.overdue.length) }))); main.appendChild(listOf(d.overdue, { showGroup: true })); }
+    (d.days || []).forEach((day, i) => {
+      main.appendChild(el('div', { class: 'day-head' }, el('h3', { text: fmtDay(day.date, { weekday: 'long', day: 'numeric', month: 'long' }) }), i === 0 ? el('span', { class: 'today', text: t('due_today') }) : i === 1 ? el('span', { class: 'muted small', text: t('due_tomorrow') }) : null));
+      (day.events || []).forEach((ev) => main.appendChild(eventRow(ev)));
+      if ((day.tasks || []).length) main.appendChild(listOf(day.tasks, { showGroup: true }));
+      if (!(day.events || []).length && !(day.tasks || []).length) main.appendChild(el('div', { class: 'faint small', style: { padding: '4px 8px' }, text: t('upcoming_free') }));
+    });
+  }
+
+  async function viewReview(main) {
+    const d = await api('GET', '/api/review'); clear(main);
+    main.appendChild(head(t('nav_review'), t('review_desc', { carry: state.settings ? state.settings.carry_limit : 3, stale: state.settings ? state.settings.stale_days : 7 })));
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    if (!d.tasks.length) { main.appendChild(el('div', { class: 'empty', text: t('review_empty') })); return; }
+    d.tasks.forEach((task) => {
+      const reason = task.review_reason === 'carried' ? t('review_reason_carried', { n: task.carry_count }) : t('review_reason_stale', { date: String(task.evaluated_at || '').slice(0, 10) });
+      const row = taskRow(task, { showGroup: true });
+      row.querySelector('.meta').appendChild(el('span', { class: 'badge alert', text: reason }));
+      main.appendChild(row);
+    });
+  }
+
+  function chipRow(items, current, onpick) {
+    const c = el('div', { class: 'chips' });
+    items.forEach((it) => c.appendChild(el('button', { class: 'chip' + (it.v === current ? ' on' : ''), onclick: () => onpick(it.v) }, it.dot ? dot(it.dot) : null, it.l)));
+    return c;
+  }
+  async function viewGroup(main, g) {
+    if (!GROUPS.includes(g) && g !== 'inbox') { go('today'); return; }
+    const qs = '?sort=' + state.sort + (state.chip ? '&project=' + encodeURIComponent(state.chip) : '') + '&group=' + g + '&status=' + (state.showDone ? 'all' : 'open');
+    const d = await api('GET', '/api/tasks' + qs); clear(main);
+    main.appendChild(head(groupName(g), t('group_' + g + '_desc'), [sortSelect(render), el('span', { class: 'counter', text: String(d.tasks.filter((x) => x.status === 'open').length) })]));
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    main.appendChild(chipRow([{ v: '', l: t('project_all') }].concat(state.projects.map((p) => ({ v: p.id, l: p.name, dot: p.color }))), state.chip, (v) => { state.chip = v; render(); }));
+    const open = d.tasks.filter((x) => x.status === 'open'), done = d.tasks.filter((x) => x.status === 'done');
+    if (!open.length) main.appendChild(el('div', { class: 'empty', text: t('empty_group') })); else main.appendChild(listOf(open, {}));
+    main.appendChild(el('button', { class: 'add-row', onclick: () => openComposer() }, el('span', { class: 'plus', text: '+' }), t('btn_add_task')));
+    main.appendChild(el('button', { class: 'link-btn small', style: { marginTop: '12px' }, text: (state.showDone ? '▾ ' : '▸ ') + t('show_done'), onclick: () => { state.showDone = !state.showDone; render(); } }));
+    if (state.showDone && done.length) { main.appendChild(sectionTitle(t('section_done'), done.length)); main.appendChild(listOf(done, {})); }
+  }
+  async function viewProject(main, pid) {
+    const p = state.projects.find((x) => x.id === pid); if (!p) { go('today'); return; }
+    const qs = '?sort=' + state.sort + '&project=' + encodeURIComponent(pid) + (state.chip ? '&group=' + state.chip : '') + '&status=' + (state.showDone ? 'all' : 'open');
+    const d = await api('GET', '/api/tasks' + qs); clear(main);
+    main.appendChild(head(p.name, null, [sortSelect(render), el('span', { class: 'counter', text: String(d.tasks.filter((x) => x.status === 'open').length) })]));
+    main.querySelector('h2').insertBefore(dot(p.color), main.querySelector('h2').firstChild); main.querySelector('h2').insertBefore(document.createTextNode(' '), main.querySelector('h2').childNodes[1]);
+    main.appendChild(el('div', { id: 'composer-anchor' }));
+    main.appendChild(chipRow([{ v: '', l: t('filter_any') }].concat(GROUPS.concat(['inbox']).map((g) => ({ v: g, l: groupName(g), dot: GROUP_COLOR[g] }))), state.chip, (v) => { state.chip = v; render(); }));
+    const open = d.tasks.filter((x) => x.status === 'open'), done = d.tasks.filter((x) => x.status === 'done');
+    if (!open.length) main.appendChild(el('div', { class: 'empty', text: t('project_empty') }));
+    else if (state.chip) main.appendChild(listOf(open, { showProject: false }));
+    else GROUPS.concat(['inbox']).forEach((g) => { const part = open.filter((x) => x.group === g); if (!part.length) return; main.appendChild(el('div', { class: 'section' }, gdot(g), el('h3', { text: groupName(g) }), el('span', { class: 'cnt', text: String(part.length) }))); main.appendChild(listOf(part, { showProject: false })); });
+    main.appendChild(el('button', { class: 'add-row', onclick: () => openComposer({ project: pid }) }, el('span', { class: 'plus', text: '+' }), t('btn_add_task')));
+    main.appendChild(el('button', { class: 'link-btn small', style: { marginTop: '12px' }, text: (state.showDone ? '▾ ' : '▸ ') + t('show_done'), onclick: () => { state.showDone = !state.showDone; render(); } }));
+    if (state.showDone && done.length) { main.appendChild(sectionTitle(t('section_done'), done.length)); main.appendChild(listOf(done, { showProject: false })); }
+  }
+
+  // ------------------------------------------------------------ проекты
+  function newProjectDialog() {
+    const name = el('input', { type: 'text', maxlength: '40', placeholder: t('project_name'), style: { width: '100%' } });
+    let color = SWATCHES[state.projects.length % SWATCHES.length];
+    const sw = el('div', { class: 'color-swatches', style: { marginTop: '10px' } });
+    const paint = () => { clear(sw); SWATCHES.forEach((c) => sw.appendChild(el('button', { class: 'swatch' + (c === color ? ' on' : ''), style: { background: c }, onclick: () => { color = c; paint(); } }))); };
+    paint();
+    let m;
+    const save = () => guarded(async () => { const v = name.value.trim(); if (!v) { name.focus(); return; } try { const r = await api('POST', '/api/projects', { name: v, color: color }); m.close(); toast(t('project_created', { name: r.project.name }), 'ok'); await refreshSidebar(); go('project', r.project.id); } catch (e) { showError(e); } });
+    name.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    m = modal(t('btn_add_project'), el('div', {}, name, sw), [{ label: t('btn_cancel') }, { label: t('btn_save'), cls: 'primary', keep: true, onclick: save }]);
+  }
+
+  // ------------------------------------------------------------ настройки
+  async function viewSettings(main) {
+    const [s, pr, j] = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/projects?archived=1'), api('GET', '/api/journal?limit=50')]);
+    state.settings = s; clear(main);
+    main.appendChild(head(t('nav_settings')));
+    const inputs = {};
+    const num = (path, labelKey, step, min, max) => { const parts = path.split('.'); const val = parts.length === 2 ? s[parts[0]][parts[1]] : s[parts[0]]; const inp = el('input', { type: 'number', step: step, min: min, max: max, value: val }); inputs[path] = inp; return el('div', { class: 'field' }, el('label', { text: t(labelKey) }), inp); };
+    const selField = (key, labelKey, options) => { const sel = el('select', {}, options.map((o) => el('option', { value: o.v, selected: o.v === s[key] }, o.l))); inputs[key] = sel; return el('div', { class: 'field' }, el('label', { text: t(labelKey) }), sel); };
+    // внешний вид + день
+    main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_appearance') }), el('div', { class: 'grid2' },
+      selField('theme', 'settings_theme', [{ v: 'dark', l: t('theme_dark') }, { v: 'light', l: t('theme_light') }]),
+      selField('language', 'settings_language', [{ v: 'ru', l: 'Русский' }, { v: 'de', l: 'Deutsch' }]),
+      selField('default_project', 'settings_default_project', pr.projects.filter((p) => !p.archived).map((p) => ({ v: p.id, l: p.name }))))));
+    main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_day') }), el('div', { class: 'grid2' },
+      num('day_limit', 'settings_day_limit', '1', '1', '10'), num('stale_days', 'settings_stale_days', '1', '1', '90'), num('carry_limit', 'settings_carry_limit', '1', '1', '10'))));
+    // календарь
+    const urls = el('textarea', { rows: '3', placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics' }); urls.value = (s.calendar_urls || []).join('\n'); inputs.calendar_urls = urls;
+    const tz = el('input', { type: 'text', value: s.timezone || 'Europe/Berlin' }); inputs.timezone = tz;
+    const status = el('div', { class: 'muted small', style: { marginTop: '8px' } });
+    const cache = s.calendar_cache;
+    status.textContent = (s.calendar_urls || []).length ? (cache && cache.fetched_at ? t('settings_calendar_status', { n: cache.events_count !== undefined ? cache.events_count : (cache.events || []).length, time: fmtTs(cache.fetched_at) }) + ((cache.errors || []).length ? ' · ' + t('calendar_error') : '') : t('settings_calendar_none')) : t('settings_calendar_none');
+    const refreshBtn = el('button', { class: 'btn small', text: t('settings_calendar_check'), onclick: () => {
+      if (busyKeys.has('calendar')) { toast(t('calendar_busy'), 'err'); return; }
+      guarded(async () => {
+        status.textContent = t('loading');
+        try { await saveSettings(); const r = await api('POST', '/api/calendar/refresh'); status.textContent = t('settings_calendar_status', { n: r.events_count, time: fmtTs(r.fetched_at) }) + ((r.errors || []).length ? ' · ' + t('calendar_error') : ''); toast(t('saved'), 'ok'); }
+        catch (e) { showError(e); }
+      }, 'calendar');
+    } });
+    main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_calendar') }),
+      el('div', { class: 'field' }, el('label', { text: t('settings_calendar_urls') }), urls),
+      el('p', { class: 'muted small', text: t('settings_calendar_help', { min: s.calendar_refresh_min || 15 }) }),
+      el('p', { class: 'small', style: { color: 'var(--warn)' }, text: t('settings_calendar_warn') }),
+      el('div', { class: 'grid2' }, el('div', { class: 'field' }, el('label', { text: t('settings_timezone') }), tz), num('calendar_refresh_min', 'settings_refresh_min', '1', '5', '1440')),
+      el('div', { class: 'row', style: { marginTop: '10px' } }, refreshBtn, status)));
+    // проекты
+    const pc = el('div', { class: 'card' }, el('h3', { text: t('settings_projects') }));
+    pr.projects.forEach((p) => {
+      const name = el('input', { type: 'text', maxlength: '40', value: p.name }); const color = el('input', { type: 'color', value: p.color });
+      const saveP = (patch) => guarded(async () => { try { await api('PATCH', '/api/projects/' + p.id, patch); await refreshSidebar(); await render(); } catch (e) { showError(e); } });
+      name.addEventListener('change', () => saveP({ name: name.value.trim() || p.name })); color.addEventListener('change', () => saveP({ color: color.value }));
+      pc.appendChild(el('div', { class: 'proj-row' + (p.archived ? ' archived' : '') }, color, name, el('span', { class: 'muted small', text: String(p.open_count || 0) }),
+        p.id !== 'praxis' ? el('button', { class: 'btn small ghost', text: p.archived ? t('project_unarchive') : t('project_archive'), onclick: () => saveP({ archived: p.archived ? 0 : 1 }) }) : null,
+        p.id !== 'praxis' ? el('button', { class: 'ib danger', text: '🗑', title: t('btn_delete'), onclick: () => { if (!window.confirm(t('project_delete_confirm', { name: p.name }))) return; guarded(async () => { try { await api('DELETE', '/api/projects/' + p.id); await refreshSidebar(); await render(); } catch (e) { showError(e); } }); } }) : null));
+    });
+    pc.appendChild(el('button', { class: 'add-row', onclick: newProjectDialog }, el('span', { class: 'plus', text: '+' }), t('btn_add_project')));
+    main.appendChild(pc);
+    // расширенные
+    const adv = el('details', {}, el('summary', { text: t('settings_advanced') }),
+      el('div', { class: 'grid2' }, num('weights.importance', 'w_importance', '0.05', '0', '1000'), num('weights.urgency', 'w_urgency', '0.05', '0', '1000'), num('weights.consequence', 'w_consequence', '0.05', '0', '1000'), num('weights.duration', 'w_duration', '0.05', '0', '1000')),
+      el('div', { class: 'grid2', style: { marginTop: '10px' } }, num('thresholds.now', 'th_now', '1', '1', '100'), num('thresholds.priority', 'th_priority', '1', '1', '100'), num('thresholds.queue', 'th_queue', '1', '1', '100')));
+    main.appendChild(el('div', { class: 'card' }, adv));
+    async function saveSettings() {
+      const patch = { weights: {}, thresholds: {} };
+      for (const path in inputs) {
+        const node = inputs[path];
+        if (path === 'calendar_urls') { patch.calendar_urls = node.value.split('\n').map((x) => x.trim()).filter(Boolean); continue; }
+        if (node.tagName === 'SELECT' || node.type === 'text') { patch[path] = node.value; continue; }
+        const v = parseFloat(node.value); const parts = path.split('.'); if (parts.length === 2) patch[parts[0]][parts[1]] = v; else patch[parts[0]] = v;
+      }
+      const saved = await api('PUT', '/api/settings', patch); state.settings = saved; applyTheme();
+      if (saved.language !== state.lang) await loadLang(saved.language);
+      return saved;
+    }
+    main.appendChild(el('div', { class: 'row', style: { margin: '4px 0 18px' } }, el('button', { class: 'btn primary', text: t('btn_save'), onclick: () => guarded(async () => { try { await saveSettings(); toast(t('settings_saved'), 'ok'); await refreshSidebar(); await render(); } catch (e) { showError(e); } }) })));
+    // журнал
+    const table = el('table', { class: 'journal' }, el('thead', {}, el('tr', {}, el('th', { text: t('journal_ts') }), el('th', { text: t('journal_task') }), el('th', { text: t('journal_event') }), el('th', { text: t('journal_change') }))));
+    const tb = el('tbody'); (j.entries || []).slice().reverse().forEach((e) => { const ch = (e.old_value || e.new_value) ? ((e.old_value ? e.old_value + ' → ' : '') + (e.new_value || '')) + (e.note ? ' (' + e.note + ')' : '') : (e.note || ''); tb.appendChild(el('tr', {}, el('td', { text: fmtTs(e.ts) }), el('td', { text: e.title || ('#' + e.task_id) }), el('td', { text: t('ev_' + e.event) }), el('td', { text: ch }))); });
+    table.appendChild(tb);
+    main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_journal') }), table));
+    // приложение
+    main.appendChild(el('div', { class: 'card' }, el('h3', { text: t('settings_danger') }), el('p', { class: 'muted small', text: t('settings_about') }),
+      el('button', { class: 'btn danger', text: t('btn_shutdown'), onclick: () => { if (!window.confirm(t('shutdown_confirm'))) return; guarded(async () => { try { await api('POST', '/api/shutdown'); } catch (e) {} clear(main); main.appendChild(el('div', { class: 'empty' }, el('b', { text: t('shutdown_done') }))); }); } })));
+  }
+
+  // ------------------------------------------------------------ клавиатура, новый день, запуск
+  document.addEventListener('keydown', (ev) => {
+    const tag = ev.target && ev.target.tagName;
+    if (ev.key === 'Escape') { if (state.composer) { closeComposer(); return; } if (state.detailId && !document.querySelector('.overlay')) { closeDetail(); return; } }
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (ev.key === 'q' || ev.key === 'й') { ev.preventDefault(); if (!document.querySelector('.overlay')) openComposer(); }
+  });
+  async function checkNewDay() {
+    let h; try { h = await api('GET', '/api/health'); } catch (e) { return; }
+    if (!h || !h.today) return;
+    const changed = state.serverToday && h.today !== state.serverToday; state.serverToday = h.today;
+    if (changed) { toast(t('new_day'), 'ok'); await refreshSidebar(); await render(); }
+  }
+  async function init() {
+    try { state.settings = await api('GET', '/api/settings'); applyTheme(); await loadLang(state.settings.language || 'ru'); } catch (e) { showError(e); }
+    state.route = parseHash();
+    await refreshSidebar(); await render();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkNewDay(); });
+    window.addEventListener('focus', () => { checkNewDay(); });
+    setInterval(checkNewDay, 60000);
+  }
+  init();
+})();
+</script>
+</body>
+</html>
