@@ -13,3 +13,6 @@ __pycache__/
 *.pyc
 fokus/data/*.log
 fokus/data/*.pid
+fokus/docs/astra/fokus-code.md
+fokus/docs/astra/fokus-tests.md
+fokus/docs/astra/fokus-for-astra.zip
