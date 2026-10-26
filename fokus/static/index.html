@@ -94,6 +94,7 @@ h3 { font-size: 20px; margin: 18px 0 10px; }
 .task .t { font-size: 19px; font-weight: 600; word-break: break-word; }
 .task.done .t { text-decoration: line-through; color: var(--muted); }
 .task .m { color: var(--muted); font-size: 15px; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; align-items: center; }
+.task .m > span + span:not(.badge)::before, .today-card .meta > span + span:not(.badge)::before { content: '·'; margin-right: 8px; opacity: .6; }
 .task .a { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .task .note { color: var(--muted); font-size: 15px; margin-top: 4px; white-space: pre-wrap; }
 .score { font-weight: 700; color: var(--text); }
@@ -353,7 +354,8 @@ table.journal th { color: var(--muted); font-weight: 600; }
   function taskRow(task, opts) {
     opts = opts || {};
     const meta = el('div', { class: 'm' },
-      el('span', { class: 'score', text: fmtScore(task.score) }), '·', dueLabel(task), '·', durLabel(task.duration), '·', whoLabel(task), badges(task, opts));
+      el('span', { class: 'score', text: fmtScore(task.score) }), el('span', { text: dueLabel(task) }),
+      el('span', { text: durLabel(task.duration) }), el('span', { text: whoLabel(task) }), badges(task, opts));
     const actions = el('div', { class: 'a' });
     if (task.status === 'open') {
       if (task.group === 'now' && !task.is_today && opts.allowToday !== false)
@@ -416,7 +418,8 @@ table.journal th { color: var(--muted); font-weight: 600; }
     }
     d.tasks.forEach((task, i) => {
       const meta = el('div', { class: 'meta' },
-        el('span', { class: 'score', text: fmtScore(task.score) }), dueLabel(task), durLabel(task.duration), whoLabel(task), badges(task, { noToday: true }));
+        el('span', { class: 'score', text: fmtScore(task.score) }), el('span', { text: dueLabel(task) }),
+        el('span', { text: durLabel(task.duration) }), el('span', { text: whoLabel(task) }), badges(task, { noToday: true }));
       const actions = el('div', { class: 'actions' },
         el('button', { class: 'check' + (task.status === 'done' ? ' on' : ''), title: t('btn_done'), onclick: () => markDone(task) }, '✓'),
         task.status === 'open' ? el('button', { class: 'btn small ghost', text: t('btn_remove_today'), onclick: () => removeFromToday(task) }) : null);
